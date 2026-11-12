@@ -1546,6 +1546,20 @@ describe("AcpRegistrySupport", () => {
 
       expect(inspection).toMatchObject({ status: "ready", agentId: agent.id });
       expect(requests).toBe(0);
+
+      const importedHome = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-registry-imported-home-",
+      });
+      const importedResolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
+        cacheDir: importedHome,
+        toolsDir: `${importedHome}/tools`,
+        registryUrl,
+      });
+      expect(yield* importedResolver.inspect(settings())).toMatchObject({
+        status: "ready",
+        agentId: agent.id,
+      });
+      expect(requests).toBe(1);
     }).pipe(
       Effect.scoped,
       Effect.provide(

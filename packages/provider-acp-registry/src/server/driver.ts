@@ -579,7 +579,17 @@ export const checkAcpRegistryProviderReadiness = Effect.fn(
     return yield* buildInitialAcpRegistrySnapshot(input);
   }
   const catalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
-  const inspected = yield* Effect.result(catalog.inspect(input.settings, input.environment));
+  const inspected = yield* Effect.result(
+    catalog.inspect(input.settings, input.environment).pipe(
+      Effect.filterOrElse(
+        (inspection) => inspection.status !== "unprepared",
+        (inspection) =>
+          catalog
+            .prepare({ agentId: inspection.agentId })
+            .pipe(Effect.andThen(catalog.inspect(input.settings, input.environment))),
+      ),
+    ),
+  );
   const snapshot = buildCheckedAcpRegistrySnapshot({
     ...input,
     checkedAt,

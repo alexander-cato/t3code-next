@@ -125,9 +125,7 @@ function managedProviders(
 }
 
 function canManageProvider(provider: ServerProvider) {
-  return Boolean(
-    provider.setup?.canAuthenticate || (provider.driver === "acpRegistry" && provider.installed),
-  );
+  return Boolean(provider.setup?.canAuthenticate || provider.driver === "acpRegistry");
 }
 
 function ProviderAccount({
@@ -141,6 +139,22 @@ function ProviderAccount({
 }) {
   const environmentId = environment.environmentId;
   const instanceId = provider.instanceId;
+  const settings = useAtomValue(serverEnvironment.settingsValueAtom(environmentId));
+  const config = settings?.providerInstances[instanceId]?.config;
+  const registryAgentId =
+    provider.driver === "acpRegistry" &&
+    config !== null &&
+    typeof config === "object" &&
+    "agentId" in config &&
+    typeof config.agentId === "string" &&
+    !("source" in config && config.source === "local") &&
+    !(
+      "commandPath" in config &&
+      typeof config.commandPath === "string" &&
+      config.commandPath.trim()
+    )
+      ? config.agentId.trim()
+      : null;
   const target = { environmentId, input: { instanceId } };
   const auth = useEnvironmentQuery(serverEnvironment.providerAuthState(target));
   const options = { reportFailure: false, reportDefect: false };
@@ -153,6 +167,12 @@ function ProviderAccount({
   const canRemoveMethod = useAtomValue(
     serverEnvironment.removeProviderAuthMethod.permissionAtom(environmentId),
   );
+  const prepare = useAtomCommand(serverEnvironment.prepareAcpRegistryAgent, options);
+  const refresh = useAtomCommand(serverEnvironment.refreshProviders);
+  const canPrepare = useAtomValue(
+    serverEnvironment.prepareAcpRegistryAgent.permissionAtom(environmentId),
+  );
+  const canRefresh = useAtomValue(serverEnvironment.refreshProviders.permissionAtom(environmentId));
   // Matches ListRowLayout: large text stacks the action below instead of squeezing the status.
   const stacked = useWindowDimensions().fontScale >= 1.5;
   const [pending, setPending] = useState(false);
@@ -170,11 +190,13 @@ function ProviderAccount({
     (provider.auth.status === "unknown" && state?.phase === "succeeded");
   const isDiscovering =
     provider.driver === "acpRegistry" &&
+    provider.installed &&
     !active &&
     !signedIn &&
     !auth.error &&
     state?.methods === undefined;
   const needsExternalSetup =
+    provider.installed &&
     !active &&
     !signedIn &&
     (provider.setup?.canAuthenticate === false ||
@@ -255,7 +277,7 @@ function ProviderAccount({
             : needsExternalSetup
               ? "No in-app sign-in advertised. Follow the provider's docs to finish setup."
               : !provider.installed
-                ? "Not installed"
+                ? (provider.message ?? "Not installed")
                 : usesCredentials
                   ? "Connect to load models"
                   : "Not signed in";
@@ -345,6 +367,22 @@ function ProviderAccount({
     <View className="h-11 w-11 items-center justify-center">
       <AppActivityIndicator colorClassName="accent-icon" />
     </View>
+  ) : !provider.installed && registryAgentId ? (
+    <ControlPill
+      variant="primary"
+      label="Prepare agent"
+      accessibilityLabel={`Prepare ${name}`}
+      disabled={!canPrepare}
+      onPress={() => {
+        void run(() => prepare({ environmentId, input: { agentId: registryAgentId } })).then(
+          async (prepared) => {
+            if (prepared && canRefresh) {
+              await refresh({ environmentId, input: { refreshModels: true } });
+            }
+          },
+        );
+      }}
+    />
   ) : needsExternalSetup && provider.setup?.documentationUrl ? (
     <ControlPill
       variant="pill"

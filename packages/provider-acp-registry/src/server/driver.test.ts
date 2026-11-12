@@ -640,6 +640,98 @@ describe("acpRegistrySnapshotReadiness", () => {
     }),
   );
 
+  it.effect("prepares a missing managed binary before publishing imported provider readiness", () =>
+    Effect.gen(function* () {
+      let installed = false;
+      const catalog = catalogWithInspection({
+        status: "unprepared",
+        agentId: "test-agent",
+        version: "1.0.0",
+        distribution: "binary",
+      });
+      const snapshot = yield* checkAcpRegistryProviderReadiness({
+        ...identity,
+        settings: decodeSettings({ agentId: "test-agent", customModels: ["custom-model"] }),
+        environment: { PATH: "/provider/bin" },
+      }).pipe(
+        Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
+          ...catalog,
+          prepare: ({ agentId }) =>
+            Effect.sync(() => {
+              expect(agentId).toBe("test-agent");
+              installed = true;
+              return { agentId, version: "1.0.0", distribution: "binary", prepared: true };
+            }),
+          inspect: (settings, environment) =>
+            Effect.sync(() => {
+              expect(environment).toEqual({ PATH: "/provider/bin" });
+              return {
+                status: installed ? ("ready" as const) : ("unprepared" as const),
+                agentId: settings.agentId,
+                version: "1.0.0",
+                distribution: "binary" as const,
+              };
+            }),
+        }),
+      );
+
+      expect(installed).toBe(true);
+      expect(snapshot).toMatchObject({
+        instanceId: identity.instanceId,
+        installed: true,
+        status: "ready",
+        version: "1.0.0",
+        models: expect.arrayContaining([expect.objectContaining({ slug: "custom-model" })]),
+      });
+    }),
+  );
+
+  it.effect("leaves a disabled imported provider unprepared", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* checkAcpRegistryProviderReadiness({
+        ...identity,
+        settings: decodeSettings({ agentId: "test-agent", enabled: false }),
+        environment: {},
+      }).pipe(
+        Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
+          ...catalogWithInspection({ status: "unconfigured" }),
+          inspect: () => Effect.die("disabled providers must not be inspected or installed"),
+        }),
+      );
+
+      expect(snapshot).toMatchObject({ installed: false, enabled: false, status: "disabled" });
+    }),
+  );
+
+  it.effect("keeps an imported provider unavailable when preparation fails", () =>
+    Effect.gen(function* () {
+      const snapshot = yield* checkAcpRegistryProviderReadiness({
+        ...identity,
+        settings: decodeSettings({ agentId: "test-agent" }),
+        environment: {},
+      }).pipe(
+        Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
+          ...catalogWithInspection({
+            status: "unprepared",
+            agentId: "test-agent",
+            version: "1.0.0",
+            distribution: "binary",
+          }),
+          prepare: () =>
+            Effect.fail(
+              new AcpRegistrySupport.AcpRegistryError({
+                reason: "install_failed",
+                detail: "Could not download the agent.",
+              }),
+            ),
+        }),
+      );
+
+      expect(snapshot).toMatchObject({ installed: false, status: "error" });
+      expect(snapshot.message).toContain("Could not download the agent.");
+    }),
+  );
+
   it("keeps a richer probed catalog when a live session reports one provisional model", () => {
     const provider = providerWithModels(
       [

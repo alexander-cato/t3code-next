@@ -68,6 +68,7 @@ import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayout";
 import { AcpSessionManagementSection } from "./AcpSessionManagementSection";
+import { AcpRegistryPrepareButton } from "./AcpRegistryPrepareButton";
 import { FoldedSettingsSection } from "./FoldedSettingsSection";
 import { readCodexSetupMode } from "./CodexSetupSection.logic";
 import {
@@ -778,6 +779,12 @@ export function ProviderInstanceCard({
   projectOverride,
 }: ProviderInstanceCardProps) {
   const enabled = projectOverride?.effectiveEnabled ?? resolveProviderInstanceEnabled(instance);
+  const registryAgentId =
+    instance.driver === "acpRegistry" &&
+    readConfigString(instance.config, "source") !== "local" &&
+    !readConfigString(instance.config, "commandPath")
+      ? readConfigString(instance.config, "agentId")
+      : null;
   const effectiveProvider = liveProvider && { ...liveProvider, enabled };
   const compatibility = enabled ? liveProvider?.compatibilityAdvisory : undefined;
   const statusKey = enabled ? getProviderStatusKey(effectiveProvider) : "disabled";
@@ -1256,6 +1263,15 @@ export function ProviderInstanceCard({
         <p aria-live="polite" className="text-xs leading-snug [overflow-wrap:anywhere]">
           {restartNotice}
         </p>
+      ) : null}
+      {environmentId && registryAgentId ? (
+        <AcpRegistryPrepareButton
+          key={`${environmentId}:${registryAgentId}`}
+          environmentId={environmentId}
+          agentId={registryAgentId}
+          installed={liveProvider?.installed === true}
+          readOnly={readOnly}
+        />
       ) : null}
       {urlAuthAction && onAcceptUrlAuth ? (
         <div className="grid max-w-xl gap-1.5 pt-1 text-xs">
