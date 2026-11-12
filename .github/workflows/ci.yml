@@ -22,7 +22,7 @@ jobs:
   # open: if the diff cannot be resolved, everything runs.
   changes:
     name: Changes
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       typecheck: ${{ steps.detect.outputs.typecheck }}
@@ -39,7 +39,7 @@ jobs:
       # Only the package manifests the script reads to build the dependency graph.
       # Depth 2 brings the base commit the change is diffed against.
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 2
           sparse-checkout: |
@@ -64,11 +64,11 @@ jobs:
       contents: read
       id-token: write
     name: Lint
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           sparse-checkout: |
             /*
@@ -92,7 +92,7 @@ jobs:
       # electron's install.js (run by ensure:electron) reads this cache before it
       # downloads from GitHub. The key changes only with the Electron version.
       - name: Cache Electron download
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/electron
           key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('node_modules/.pnpm/electron@*/node_modules/electron/package.json') }}
@@ -120,11 +120,11 @@ jobs:
     name: Build and Typecheck
     needs: changes
     if: ${{ !cancelled() && (needs.changes.outputs.build != 'false' || needs.changes.outputs.typecheck != 'false') }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           sparse-checkout: |
             /*
@@ -161,7 +161,7 @@ jobs:
       # electron's install.js (run by ensure:electron) reads this cache before it
       # downloads from GitHub. The key changes only with the Electron version.
       - name: Cache Electron download
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/electron
           key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('node_modules/.pnpm/electron@*/node_modules/electron/package.json') }}
@@ -213,7 +213,7 @@ jobs:
 
       - name: Upload desktop launch check
         if: ${{ failure() && steps.desktop_launch.outcome == 'failure' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: desktop-launch-check
           path: ${{ runner.temp }}/desktop-launch-check
@@ -231,7 +231,7 @@ jobs:
       - name: Cache Chromium
         id: chromium_cache
         if: ${{ !cancelled() && steps.build.outcome == 'success' && needs.changes.outputs.test_web != 'false' }}
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-shell-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright_version.outputs.version }}
@@ -275,11 +275,11 @@ jobs:
     name: Test
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.test != 'false' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           sparse-checkout: |
             /*
@@ -314,7 +314,7 @@ jobs:
       # electron's install.js (run by ensure:electron) reads this cache before it
       # downloads from GitHub. The key changes only with the Electron version.
       - name: Cache Electron download
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/electron
           key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('node_modules/.pnpm/electron@*/node_modules/electron/package.json') }}
@@ -365,7 +365,7 @@ jobs:
     name: Test Web ${{ matrix.shard }}
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.test_web != 'false' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
       fail-fast: false
@@ -373,7 +373,7 @@ jobs:
         shard: [1, 2]
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           sparse-checkout: |
             /*
@@ -394,7 +394,7 @@ jobs:
 
       - name: Cache Chromium
         id: chromium_cache
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-shell-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright_version.outputs.version }}
@@ -427,7 +427,7 @@ jobs:
       contents: read
       id-token: write
     name: Test Server ${{ matrix.shard }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     # Shards take 2-5 minutes. When the shared task cache throttles reads, each
     # failed fetch stalls vp for 15-90s, which pushed shards past 10 minutes.
     timeout-minutes: 20
@@ -438,7 +438,7 @@ jobs:
     steps:
       # Depth 2 brings the base commit the change is diffed against.
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 2
           sparse-checkout: |
@@ -469,7 +469,7 @@ jobs:
       - name: Cache Chromium
         id: chromium_cache
         if: steps.changes.outputs.test_server != 'false'
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-shell-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright_version.outputs.version }}
@@ -492,7 +492,7 @@ jobs:
       # Only pushes to main save it, so pull requests never evict each other's entries.
       - name: Restore Vitest module cache
         if: steps.changes.outputs.test_server != 'false'
-        uses: actions/cache/restore@v6
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: node_modules/.vitest-cache
           key: vitest-modules-server-${{ matrix.shard }}-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
@@ -510,7 +510,7 @@ jobs:
 
       - name: Save Vitest module cache
         if: github.event_name == 'push' && steps.changes.outputs.test_server != 'false'
-        uses: actions/cache/save@v6
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: node_modules/.vitest-cache
           key: vitest-modules-server-${{ matrix.shard }}-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
@@ -540,7 +540,7 @@ jobs:
 
       - name: Upload thread transfer result
         if: always() && steps.transfer_budget.outputs.present == 'true'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: thread-transfer-results
           path: ${{ runner.temp }}/thread-transfer-result.json
@@ -553,11 +553,11 @@ jobs:
     name: Rust
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.rust != 'false' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           sparse-checkout: |
             /*
@@ -566,7 +566,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt
 
@@ -586,11 +586,11 @@ jobs:
     name: Mobile Native Static Analysis
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.mobile_native != 'false' }}
-    runs-on: blacksmith-6vcpu-macos-26
+    runs-on: macos-26
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           sparse-checkout: |
             /*
@@ -598,7 +598,7 @@ jobs:
           sparse-checkout-cone-mode: false
 
       - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
+        uses: voidzero-dev/setup-vp@250f29ce396baf5e8f24498e17c0dfdebabc26eb # v1
         with:
           node-version-file: package.json
           cache: true
@@ -619,11 +619,11 @@ jobs:
     name: Release Smoke
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.release_smoke != 'false' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           sparse-checkout: |
             /*
@@ -659,7 +659,7 @@ jobs:
         mobile_native_static_analysis,
         release_smoke,
       ]
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Require every job to pass
@@ -681,7 +681,7 @@ jobs:
       # server tests ran must have produced it.
       - name: Require transfer measurements
         if: needs.test_server.result == 'success' && needs.changes.outputs.test_server != 'false'
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: thread-transfer-results
           path: ${{ runner.temp }}/thread-transfer
