@@ -192,6 +192,42 @@ startup and keeps its own SQLite data, signing key, and revocation state. Deskto
 servers ignore the value. See [environment authentication](../internals/environment-auth.md#reusable-dev-credential)
 for the security model.
 
+## Personal distribution workflow
+
+In `alexander-cato/t3code-next`, `main` contains the application source and is the integration branch.
+`upstream/nightly` records the pinned published upstream nightly. Custom changes use PRs into
+`main`; do not develop on or push custom changes to the upstream snapshot branch.
+
+Start each feature from a current `origin/main`. In T3, explicitly select that starting branch. For
+an existing clean checkout:
+
+```sh
+git fetch --no-tags origin
+fork_work_branch=fork-work/my-change
+git switch --no-track -c "$fork_work_branch" origin/main
+git config "branch.$fork_work_branch.t3-merge-base" origin/main
+git config "branch.$fork_work_branch.t3-merge-base-ref" refs/remotes/origin/main
+git config "branch.$fork_work_branch.gh-merge-base" main
+```
+
+After implementing and checking the change:
+
+```sh
+vp run check:changed origin/main
+git push --set-upstream origin HEAD
+gh pr create --repo alexander-cato/t3code-next --base main --head "$fork_work_branch"
+```
+
+Merge through GitHub after passing checks and review. `main` requires signed commits and resolved
+review conversations; its protections also apply to administrators. GitHub-signed merge commits
+preserve the upstream ancestry. The required CI and context-budget checks must come from GitHub
+Actions. Release credentials belong only in the `fork-release` environment, restricted to `main`.
+
+The existing `alexander-cato/t3code` repository continues serving installed clients during migration.
+Keep its release branches, tags, assets, and update feed intact until a signed updater transition
+has been verified. This repository's inherited deployment workflows remain disabled until their
+successors are reviewed and configured. Upstream workflow changes need their own review.
+
 ## Checks
 
 `vp run check:changed` runs CI's fast checks for your branch's changes: format and lint of the

@@ -1,5 +1,7 @@
 # T3 Code
 
+This is Alexander Cato's personal distribution of [T3 Code](https://github.com/pingdotgg/t3code), currently being migrated through reviewed PRs into `main`. During migration, continue using the [existing fork's releases](https://github.com/alexander-cato/t3code/releases). The upstream installation instructions below do not install this personal distribution.
+
 T3 Code is an "agent harness control surface". It enables control of the agents on your machine with a best-in-class mobile app ([iOS](https://apps.apple.com/us/app/t3-code-remote-claude-more/id6787819824), [Android](https://play.google.com/store/apps/details?id=com.t3tools.t3code)), [web app](https://app.t3.codes) and [Electron-based desktop app](https://t3.codes).
 
 Works with your subscriptions on Claude Code, Codex, Cursor, Grok Build, OpenCode, Google Antigravity, and fx. If they're set up on your computer, T3 Code can control them.
