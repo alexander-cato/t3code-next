@@ -292,6 +292,9 @@ describe("resolveWorkflowOpening", () => {
       parentSubagents: null,
     });
     expect(opening).toMatchObject({ script: SCRIPT, name: null, group: null });
+    for (const prefix of ["", " \n\t", "// note\r\n", "/* note */", "/* one */ // two\n"]) {
+      expect(isWorkflowScriptMessage(brief(`${prefix}export const meta = {};`))).toBe(true);
+    }
   });
 
   it("leaves an ordinary subagent thread and other threads alone", () => {
@@ -316,5 +319,15 @@ describe("resolveWorkflowOpening", () => {
       false,
     );
     expect(isWorkflowScriptMessage({ role: "assistant", text: SCRIPT })).toBe(false);
+    for (const text of [
+      `${"//".repeat(24)}export const meta`,
+      `${"//".repeat(24)}!`,
+      "/* export const meta",
+      "/* one */ /* export const meta",
+      "/* one */ prose export const meta",
+      "export const metadata = {};",
+    ]) {
+      expect(isWorkflowScriptMessage(brief(text))).toBe(false);
+    }
   });
 });
