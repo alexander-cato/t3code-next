@@ -7,6 +7,30 @@ import * as PlatformError from "effect/PlatformError";
 
 import { clearStaleGpuCaches, resolveUserDataPath } from "./DesktopUserData.ts";
 
+it.effect("keeps fork profiles separate without importing upstream credentials", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-fork-profile-" });
+    yield* fs.makeDirectory(path.join(directory, "t3code-v2"));
+    yield* fs.writeFileString(path.join(directory, "t3code-v2", "Local State"), "upstream keys");
+    for (const platform of ["darwin", "win32"] as const) {
+      const fork = yield* resolveUserDataPath({
+        appDataDirectory: directory,
+        isDevelopment: false,
+        platform,
+        fork: true,
+      });
+      assert.equal(fork, path.join(directory, "t3code-fork"));
+      assert.isFalse(yield* fs.exists(fork));
+    }
+    assert.equal(
+      yield* fs.readFileString(path.join(directory, "t3code-v2", "Local State")),
+      "upstream keys",
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect.each(["t3code", "T3 Code (Alpha)"])(
   "preserves Windows credential keys from %s without copying browser databases",
   (sourceName) =>

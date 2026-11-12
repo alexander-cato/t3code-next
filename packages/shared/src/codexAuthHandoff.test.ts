@@ -33,6 +33,9 @@ const callbackUrl = `http://127.0.0.1:54213/auth/callback?state=${"a".repeat(43)
 describe("Codex desktop handoff", () => {
   it("keeps the hosted return route, account, and environment with the code in a fragment", () => {
     expect(readCodexAuthHandoff(codexAuthHandoffUrl(input), false)).toEqual(input);
+    expect(
+      readCodexAuthHandoff(codexAuthHandoffUrl(input).replace("t3code:", "t3code-fork:"), false),
+    ).toEqual(input);
     const delivery = codexAuthDeliveryUrl(input, callbackUrl);
     expect(new URL(delivery).search).toBe("");
     expect(readCodexAuthDelivery(delivery)).toEqual({

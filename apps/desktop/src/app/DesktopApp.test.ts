@@ -56,6 +56,7 @@ import * as DesktopBackendConfiguration from "../backend/DesktopBackendConfigura
 import * as DesktopCliCommand from "./DesktopCliCommand.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as DesktopConnectionCatalogStore from "./DesktopConnectionCatalogStore.ts";
+import * as DesktopInstallationData from "./DesktopInstallationData.ts";
 import * as DesktopIpc from "../ipc/DesktopIpc.ts";
 import * as DesktopLocalEnvironmentAuth from "../backend/DesktopLocalEnvironmentAuth.ts";
 import * as DesktopManagedPolicy from "./DesktopManagedPolicy.ts";
@@ -94,6 +95,12 @@ it.effect.each([false, true])(
       const runApp = DesktopApp.program
         .pipe(
           Effect.provide(NodeCrypto.layer),
+          Effect.provideService(DesktopInstallationData.DesktopInstallationData, {
+            getState: Effect.succeed({ supported: false, installations: [], backups: [] }),
+            prepare: () => Effect.void,
+            restore: () => Effect.void,
+            applyPending: Effect.void,
+          }),
           Effect.provideService(DesktopAppIdentity.DesktopAppIdentity, {
             resolveUserDataPath: Effect.succeed("/isolated/userdata"),
             configure: record("identity"),

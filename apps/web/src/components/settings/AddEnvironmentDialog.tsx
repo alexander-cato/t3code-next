@@ -68,6 +68,7 @@ import {
 const EMPTY_DISCOVERED_SSH_HOSTS: ReadonlyArray<DesktopDiscoveredSshHost> = [];
 
 export function AddEnvironmentDialog({
+  initialHost = "",
   open,
   routeTarget,
   error,
@@ -75,6 +76,7 @@ export function AddEnvironmentDialog({
   onOpenChange,
   onErrorChange,
 }: {
+  readonly initialHost?: string;
   readonly open: boolean;
   readonly routeTarget: EnvironmentPresentation | null;
   readonly error: string | null;
@@ -110,7 +112,7 @@ export function AddEnvironmentDialog({
     return keys;
   })();
   const [savedBackendMode, setSavedBackendMode] = useState<"remote" | "ssh">("remote");
-  const [savedBackendHost, setSavedBackendHost] = useState("");
+  const [savedBackendHost, setSavedBackendHost] = useState(initialHost);
   const [savedBackendPairingCode, setSavedBackendPairingCode] = useState("");
   const [savedBackendSshHost, setSavedBackendSshHost] = useState("");
   const [savedBackendSshUsername, setSavedBackendSshUsername] = useState("");
@@ -151,7 +153,7 @@ export function AddEnvironmentDialog({
     if (!nextOpen) {
       savedBackendSessionRef.current += 1;
       setSavedBackendMode("remote");
-      setSavedBackendHost("");
+      setSavedBackendHost(initialHost);
       setSavedBackendPairingCode("");
       setSavedBackendSshHost("");
       setSavedBackendSshUsername("");

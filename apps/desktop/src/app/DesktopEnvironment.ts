@@ -16,9 +16,11 @@ import * as DesktopConfig from "./DesktopConfig.ts";
 import { resolveLinuxDesktopEntryName } from "./DesktopEarlyElectronStartup.ts";
 import { resolveDesktopBaseDir, resolveDesktopStateDir } from "./DesktopStatePaths.ts";
 import { isNightlyDesktopVersion } from "../updates/updateChannels.ts";
+import { desktopForkIdentity, isDesktopForkBuild } from "../forkIdentity.ts";
 import type { OtlpProtocol } from "@t3tools/shared/observability";
 
 export interface MakeDesktopEnvironmentInput {
+  readonly fork?: boolean;
   readonly dirname: string;
   readonly homeDirectory: string;
   readonly platform: NodeJS.Platform;
@@ -99,14 +101,17 @@ function resolveDesktopAppStageLabel(input: {
 }
 
 export function resolveDesktopAppBranding(input: {
+  readonly fork?: boolean;
   readonly isDevelopment: boolean;
   readonly appVersion: string;
 }): DesktopAppBranding {
   const stageLabel = resolveDesktopAppStageLabel(input);
+  const baseName =
+    (input.fork ?? isDesktopForkBuild) ? desktopForkIdentity.baseName : APP_BASE_NAME;
   return {
-    baseName: APP_BASE_NAME,
+    baseName,
     stageLabel,
-    displayName: `${APP_BASE_NAME} (${stageLabel})`,
+    displayName: `${baseName} (${stageLabel})`,
   };
 }
 
@@ -146,6 +151,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
   const path = yield* Path.Path;
   const config = yield* DesktopConfig.DesktopConfig;
   const homeDirectory = input.homeDirectory;
+  const fork = input.fork ?? isDesktopForkBuild;
   const devServerUrl = config.devServerUrl;
   const isDevelopment = Option.isSome(devServerUrl);
   const appDataDirectory =
@@ -157,6 +163,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
         ? path.join(homeDirectory, "Library", "Application Support")
         : Option.getOrElse(config.xdgConfigHome, () => path.join(homeDirectory, ".config"));
   const baseDir = resolveDesktopBaseDir({
+    fork,
     homeDirectory,
     joinPath: path.join,
     t3Home: config.t3Home,
@@ -168,6 +175,7 @@ const make = Effect.fn("desktop.environment.make")(function* (
       ? path.join(input.resourcesPath, "server.asar")
       : appRoot;
   const branding = resolveDesktopAppBranding({
+    fork,
     isDevelopment,
     appVersion: input.appVersion,
   });
@@ -228,7 +236,11 @@ const make = Effect.fn("desktop.environment.make")(function* (
     branding,
     displayName,
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
-      isDevelopment ? "com.t3tools.t3code.dev" : "com.t3tools.t3code",
+      fork
+        ? desktopForkIdentity.appId
+        : isDevelopment
+          ? "com.t3tools.t3code.dev"
+          : "com.t3tools.t3code",
     ),
     linuxDesktopEntryName: resolveLinuxDesktopEntryName(isDevelopment),
     linuxApplicationsDir,
