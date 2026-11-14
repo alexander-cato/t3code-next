@@ -33,11 +33,18 @@ jobs:
       checks: read
       issues: read
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-          sparse-checkout: .github/scripts
+      - name: Check out pinned public source without credentials
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git -c credential.helper= clone --filter=blob:none --no-checkout --depth=1 https://github.com/alexander-cato/t3code-next.git .
+          git config --local credential.helper ""
+          git fetch --no-tags --filter=blob:none --depth=1 origin "$SOURCE_SHA"
+          git sparse-checkout set .github/scripts
+          git -c submodule.recurse=false checkout --detach "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
       - name: Grant the sync App access only to this repository
         id: sync_app
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
