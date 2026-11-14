@@ -3,10 +3,14 @@ import {
   OrchestratorMcpFailure,
   VirtualMachineControlInput,
   VirtualMachineCreateInput,
+  VirtualMachineDownloadInput,
   VirtualMachineError,
   VirtualMachineExecInput,
   VirtualMachineExecResult,
+  VirtualMachineJobInput,
+  VirtualMachineJobResult,
   VirtualMachineTarget,
+  VirtualMachineToolsInput,
   VirtualMachineUploadInput,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -35,7 +39,7 @@ const done = Schema.Struct({ message: Schema.String });
 
 const create = Tool.make("vm_create", {
   description:
-    "Create a local macOS Tahoe VM with Cua desktop control and development tools. Returns immediately while the image downloads and the VM starts. device_list reports creation progress and failures. Requires substantial free disk space; source and host files are not shared automatically.",
+    "Create a local macOS VM with Cua desktop control. Without from it downloads a new macOS Tahoe image with the Command Line Tools, which takes a long time and about 60 GB of disk. With from it clones a suspended VM in seconds, keeping its installed apps such as Xcode, so a task can start from a prepared base and throw the clone away with vm_delete. Returns at once; device_list reports progress and failures. A new VM starts running and takes one of the two macOS VM slots. Host files are not shared.",
   parameters: VirtualMachineCreateInput,
   success: done,
   failure,
@@ -53,17 +57,32 @@ const remove = Tool.make("vm_delete", {
   .annotate(Tool.Destructive, true);
 const exec = Tool.make("vm_exec", {
   description:
-    "Run a shell command inside a VM opened in this thread with device_open. Returns stdout, stderr and exitCode. Use for builds, installing a test app, logs, guest files and diagnostic scripts. Commands run inside the guest, not on the host Mac. Copy source or build artifacts into the guest explicitly; no host folders are mounted.",
+    "Run a shell command inside a VM opened in this thread with device_open. Returns stdout, stderr and exitCode; a command stopped at timeoutSeconds returns exitCode 124. Use for builds, tests, installing an app, logs and guest files. For work that may outlast the timeout, such as a full build or test suite, pass background: true and read it with vm_job. Commands run in the guest, not on the host Mac, as children of the guest's desktop agent, so they reach the logged-in GUI session. No host folders are mounted, so bring source in with vm_upload and results out with vm_download.",
   parameters: VirtualMachineExecInput,
   success: VirtualMachineExecResult,
   failure,
   dependencies,
 }).annotate(Tool.Readonly, false);
+const job = Tool.make("vm_job", {
+  description:
+    "Read a background job that vm_exec started with background: true. Returns its state, exit code and the end of its combined output. The full log stays in the guest at logPath. stop: true ends the job first. Jobs survive closing and suspending the VM, not deleting it.",
+  parameters: VirtualMachineJobInput,
+  success: VirtualMachineJobResult,
+  failure,
+  dependencies,
+}).annotate(Tool.Readonly, false);
 const tools = Tool.make("vm_tools", {
   description:
-    "Get the current Cua desktop tool names and JSON schemas from an open VM. Use these schemas with vm_control to inspect windows and accessibility, click, drag, type, send shortcuts, and control guest apps. Prefer element references when available.",
-  parameters: VirtualMachineTarget,
-  success: Schema.Array(McpSchema.Tool),
+    "List the Cua desktop tools of an open VM. Without tools it returns each tool's name and description; pass tools with the names you need to get their JSON schemas for vm_control. They inspect windows and accessibility, click, drag, type, send shortcuts, and control guest apps. Prefer element references when available.",
+  parameters: VirtualMachineToolsInput,
+  success: Schema.Union([
+    Schema.Array(McpSchema.Tool),
+    Schema.Struct({
+      tools: Schema.Array(
+        Schema.Struct({ name: Schema.String, description: Schema.optional(Schema.String) }),
+      ),
+    }),
+  ]),
   failure,
   dependencies,
 }).annotate(Tool.Readonly, true);
@@ -83,5 +102,13 @@ const upload = Tool.make("vm_upload", {
   failure,
   dependencies: [...dependencies, ProjectService.ProjectService],
 }).annotate(Tool.Readonly, false);
-export const VmStandardToolkit = Toolkit.make(create, remove, exec, tools, upload);
+const download = Tool.make("vm_download", {
+  description:
+    "Copy one file from an open VM into this thread's workspace, such as a test report, log, screenshot or built archive. guestPath is an absolute guest path. relativePath must stay inside the workspace and its directory must exist; an existing regular file is replaced. For a directory, tar it in the guest with vm_exec first.",
+  parameters: VirtualMachineDownloadInput,
+  success: Schema.Struct({ message: Schema.String, bytes: Schema.Number }),
+  failure,
+  dependencies: [...dependencies, ProjectService.ProjectService],
+}).annotate(Tool.Readonly, false);
+export const VmStandardToolkit = Toolkit.make(create, remove, exec, job, tools, upload, download);
 export const VmControlToolkit = Toolkit.make(VmControlTool);
