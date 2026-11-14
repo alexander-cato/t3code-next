@@ -356,6 +356,8 @@ export default defineConfig(() => {
       bundledDev,
     },
     server: {
+      // API proxies own preflight policy, including opaque-origin guest viewers.
+      cors: { preflightContinue: true },
       host,
       port,
       strictPort: true,

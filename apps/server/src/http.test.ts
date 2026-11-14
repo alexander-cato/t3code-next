@@ -97,6 +97,46 @@ describe("MCP app asset responses", () => {
 });
 
 describe("browser API CORS", () => {
+  it("leaves opaque-origin VM CORS to the guest proxy", async () => {
+    const route = HttpRouter.add(
+      "OPTIONS",
+      "/api/vm-viewer/lease/viewer/",
+      HttpServerResponse.empty({
+        status: 204,
+        headers: {
+          "access-control-allow-origin": "null",
+          "access-control-allow-headers": "x-cua-env-authorization",
+        },
+      }),
+    );
+    const { handler, dispose } = HttpRouter.toWebHandler(
+      route.pipe(
+        Layer.provide(ServerHttp.layerBrowserApiCors),
+        Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "vm-cors-test-" })),
+        Layer.provide(NodeServices.layer),
+      ),
+      { disableLogger: true },
+    );
+    try {
+      const response = await handler(
+        new Request("https://backend.example/api/vm-viewer/lease/viewer/", {
+          method: "OPTIONS",
+          headers: {
+            origin: "null",
+            "access-control-request-method": "POST",
+            "access-control-request-headers": "x-cua-env-authorization",
+          },
+        }),
+      );
+      expect(response.status).toBe(204);
+      expect(response.headers.get("access-control-allow-origin")).toBe("null");
+      expect(response.headers.get("access-control-allow-headers")).toBe("x-cua-env-authorization");
+      expect(response.headers.get("access-control-allow-credentials")).toBeNull();
+    } finally {
+      await dispose();
+    }
+  });
+
   it("accepts protocol negotiation with authenticated browser headers", async () => {
     const layerRoute = Layer.effectDiscard(
       Effect.gen(function* () {

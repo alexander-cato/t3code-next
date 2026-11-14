@@ -37,7 +37,14 @@ export interface DeviceTabTarget {
 export type RightPanelSurface =
   | { id: `browser:${string}`; kind: "preview"; resourceId: string }
   | { id: "browser:new"; kind: "preview"; resourceId: null }
-  | { id: "device" | `device:${string}`; kind: "device"; target?: DeviceTabTarget; title?: string }
+  | {
+      id: "device" | `device:${string}`;
+      kind: "device";
+      target?: DeviceTabTarget;
+      /** A macOS VM shown in this device tab instead of a simulator or emulator. */
+      virtualMachine?: string;
+      title?: string;
+    }
   | {
       id: `terminal:${string}`;
       kind: "terminal";
@@ -81,7 +88,7 @@ export type RightPanelSurface =
   | { id: `side-chat:${string}`; kind: "side-chat"; threadId: ThreadId };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
-const RIGHT_PANEL_STORAGE_VERSION = 14;
+const RIGHT_PANEL_STORAGE_VERSION = 15;
 
 export const PULL_REQUESTS_PANEL_REF = scopeThreadRef(
   EnvironmentId.make("pull-requests-panel"),
@@ -107,6 +114,11 @@ export interface ThreadPanelVisibility {
 interface RightPanelStoreState {
   byThreadKey: Record<string, ThreadRightPanelState>;
   pendingMaximizeThreadKey: string | null;
+  openVirtualMachine: (ref: ScopedThreadRef, name: string, automatic?: boolean) => void;
+  /** Returns a VM device tab to the device list. */
+  showDevicePicker: (ref: ScopedThreadRef, surfaceId: string) => void;
+  /** Returns every VM device tab in the environment, or only those showing `name`, to the device list. */
+  releaseVirtualMachineTabs: (environmentId: EnvironmentId, name?: string) => void;
   requestMaximize: (ref: ScopedThreadRef) => void;
   consumeMaximizeRequest: (ref: ScopedThreadRef) => boolean;
   threadPanelVisibilityByThreadKey: Record<string, ThreadPanelVisibility>;
@@ -227,6 +239,31 @@ const singletonSurface = (
       return { id: "device", kind };
   }
 };
+
+const virtualMachineSurfaceId = (name: string) => `device:@vm:${encodeURIComponent(name)}` as const;
+
+// Host ids cannot contain "@", so VM tab ids never collide with a device's.
+function devicePickerFor(
+  thread: ThreadRightPanelState,
+  surfaceIds: ReadonlySet<string>,
+): ThreadRightPanelState {
+  const picker = thread.surfaces.find((surface) => surface.id === "device");
+  const replaced = thread.surfaces.find((surface) => surfaceIds.has(surface.id));
+  if (!replaced) return thread;
+  const surfaces = thread.surfaces.flatMap((surface): RightPanelSurface[] => {
+    if (!surfaceIds.has(surface.id)) return [surface];
+    if (picker || surface.id !== replaced.id) return [];
+    return [{ id: "device", kind: "device" }];
+  });
+  return {
+    ...thread,
+    surfaces,
+    activeSurfaceId:
+      thread.activeSurfaceId !== null && surfaceIds.has(thread.activeSurfaceId)
+        ? "device"
+        : thread.activeSurfaceId,
+  };
+}
 
 const browserSurface = (tabId: string | null): RightPanelSurface =>
   tabId
@@ -502,7 +539,7 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
               const surfaces = Array.isArray(validThreadState?.surfaces)
                 ? validThreadState.surfaces.flatMap<RightPanelSurface>((surface) => {
                     const kind = (surface as { kind?: string }).kind;
-                    if (kind === "plan" || kind === "agents") return [];
+                    if (kind === "plan" || kind === "agents" || kind === "vm") return [];
                     if (
                       (surface.kind === "file" || surface.kind === "files") &&
                       "folderTrail" in surface &&
@@ -639,6 +676,54 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
     (set, get) => ({
       byThreadKey: {},
       pendingMaximizeThreadKey: null,
+      openVirtualMachine: (ref, name, automatic = false) =>
+        set((state) =>
+          (automatic ? automaticUpdate : userAction)(state, scopedThreadKey(ref), (current) => {
+            const id = virtualMachineSurfaceId(name);
+            if (automatic && current.dismissedDeviceSurfaceIds?.includes(id)) return current;
+            const surface: RightPanelSurface = { id, kind: "device", virtualMachine: name };
+            const existing = current.surfaces.find((entry) => entry.id === id);
+            const surfaces = existing
+              ? current.surfaces.filter((entry) => entry.id !== "device")
+              : current.surfaces.map((entry) => (entry.id === "device" ? surface : entry));
+            return upsertSurface(
+              {
+                ...current,
+                surfaces,
+                dismissedDeviceSurfaceIds: (current.dismissedDeviceSurfaceIds ?? []).filter(
+                  (entry) => entry !== id,
+                ),
+              },
+              existing ?? surface,
+            );
+          }),
+        ),
+      showDevicePicker: (ref, surfaceId) =>
+        set((state) =>
+          updateThread(state, scopedThreadKey(ref), (current) =>
+            devicePickerFor(current, new Set([surfaceId])),
+          ),
+        ),
+      releaseVirtualMachineTabs: (environmentId, name) =>
+        set((state) => {
+          let byThreadKey = state.byThreadKey;
+          for (const [key, thread] of Object.entries(state.byThreadKey)) {
+            if (parseScopedThreadKey(key)?.environmentId !== environmentId) continue;
+            const ids = new Set(
+              thread.surfaces.flatMap((surface) =>
+                surface.kind === "device" &&
+                surface.virtualMachine !== undefined &&
+                (name === undefined || surface.virtualMachine === name)
+                  ? [surface.id]
+                  : [],
+              ),
+            );
+            if (ids.size === 0) continue;
+            if (byThreadKey === state.byThreadKey) byThreadKey = Object.assign({}, byThreadKey);
+            byThreadKey[key] = devicePickerFor(thread, ids);
+          }
+          return byThreadKey === state.byThreadKey ? state : { byThreadKey };
+        }),
       requestMaximize: (ref) => set({ pendingMaximizeThreadKey: scopedThreadKey(ref) }),
       consumeMaximizeRequest: (ref) => {
         if (get().pendingMaximizeThreadKey !== scopedThreadKey(ref)) return false;

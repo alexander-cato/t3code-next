@@ -4,6 +4,7 @@ import {
   type EnvironmentId,
   type PreviewSessionSnapshot,
   ThreadId,
+  type VirtualMachineState,
 } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -20,6 +21,7 @@ import {
 import { useRightPanelStore } from "../../rightPanelStore";
 import {
   applyDeviceSnapshot,
+  applyVirtualMachineSnapshot,
   floatDeviceSurface,
   followPreviewSessions,
   resetDeviceSessionBaselinesForTests,
@@ -166,6 +168,74 @@ describe("applyDeviceSnapshot", () => {
     expect(
       usePreviewMiniPlayerStore.getState().byThreadKey[scopedThreadKey(otherRef)]?.source,
     ).toMatchObject({ kind: "device", deviceId: "pixel" });
+  });
+});
+
+describe("applyVirtualMachineSnapshot", () => {
+  const vmSession = { name: "mac-one", threadId: ref.threadId };
+  const vmState = (input: {
+    readonly enabled?: boolean;
+    readonly sessions?: ReadonlyArray<typeof vmSession>;
+  }): VirtualMachineState => ({
+    enabled: input.enabled ?? true,
+    available: true,
+    unavailableReason: null,
+    machines: [],
+    sessions: input.sessions ?? [],
+    operations: [],
+  });
+  const vmTabs = () =>
+    useRightPanelStore
+      .getState()
+      .byThreadKey[threadKey]?.surfaces.filter((surface) => surface.kind === "device");
+
+  it("floats VMs opened after the baseline, or opens a tab when floating previews are off", () => {
+    setup();
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({ sessions: [vmSession] }), floating);
+    expect(miniPlayerSource()).toBeUndefined();
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({}), floating);
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({ sessions: [vmSession] }), floating);
+    expect(miniPlayerSource()).toEqual({ kind: "vm", name: "mac-one" });
+
+    setup();
+    const panel = { sheetLayout: false, autoShowFloatingPreview: false };
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({}), panel);
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({ sessions: [vmSession] }), panel);
+    expect(vmTabs()).toEqual([
+      { id: "device:@vm:mac-one", kind: "device", virtualMachine: "mac-one" },
+    ]);
+    expect(miniPlayerSource()).toBeUndefined();
+  });
+
+  it("leaves a VM that already has a tab alone, as when its session arrives after the open", () => {
+    setup();
+    useRightPanelStore.getState().openVirtualMachine(ref, "mac-one");
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({}), floating);
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({ sessions: [vmSession] }), floating);
+    expect(miniPlayerSource()).toBeUndefined();
+    expect(vmTabs()).toHaveLength(1);
+  });
+
+  it("closes floating VMs and returns tabs when VMs turn off, ignoring late sessions", () => {
+    setup();
+    useRightPanelStore.getState().openVirtualMachine(ref, "mac-two");
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({ sessions: [vmSession] }), floating);
+    usePreviewMiniPlayerStore.getState().open(ref, { kind: "vm", name: "mac-one" });
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({ sessions: [vmSession] }), floating);
+    expect(miniPlayerSource()).toEqual({ kind: "vm", name: "mac-one" });
+
+    applyVirtualMachineSnapshot(
+      ref.environmentId,
+      vmState({ enabled: false, sessions: [vmSession, { ...vmSession, name: "mac-three" }] }),
+      floating,
+    );
+    expect(miniPlayerSource()).toBeUndefined();
+    expect(vmTabs()).toEqual([{ id: "device", kind: "device" }]);
+
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({ sessions: [] }), floating);
+    usePreviewMiniPlayerStore.getState().open(ref, { kind: "vm", name: "mac-one" });
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({ sessions: [] }), floating);
+    expect(miniPlayerSource()).toBeUndefined();
   });
 });
 

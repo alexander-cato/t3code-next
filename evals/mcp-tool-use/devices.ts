@@ -40,6 +40,7 @@ import {
 } from "../../apps/server/src/device/AgentDeviceTarget.ts";
 import type * as DeviceHost from "../../apps/server/src/device/DeviceHost.ts";
 import * as DeviceService from "../../apps/server/src/device/DeviceService.ts";
+import * as VirtualMachineService from "../../apps/server/src/vm/VirtualMachineService.ts";
 import * as McpHttpServer from "../../apps/server/src/mcp/McpHttpServer.ts";
 import * as McpInvocationContext from "../../apps/server/src/mcp/McpInvocationContext.ts";
 import { liveThreadsLayer } from "../../apps/server/src/mcp/McpToolAccess.testkit.ts";
@@ -781,6 +782,19 @@ export const makeDeviceTools = Effect.fn("evaluateMcpToolUse.makeDeviceTools")(f
         Layer.mergeAll(
           liveThreadsLayer,
           Layer.mock(ProjectService.ProjectService)({ getById: () => Effect.succeedNone }),
+          // Device worlds hold simulators and emulators; a host that cannot run macOS VMs
+          // keeps them out of every device tool result.
+          Layer.succeed(HostProcess.Platform, "linux"),
+          Layer.mock(VirtualMachineService.VirtualMachineService)({
+            state: Effect.succeed({
+              enabled: false,
+              available: false,
+              unavailableReason: null,
+              machines: [],
+              sessions: [],
+              operations: [],
+            }),
+          }),
           ServerSettingsService.layerTest({
             enableDeviceSupport: true,
             enableAgentDeviceAccess: world.deviceAgentAccess !== false,

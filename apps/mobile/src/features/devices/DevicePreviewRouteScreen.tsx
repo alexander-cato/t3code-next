@@ -36,13 +36,28 @@ import { uuidv4 } from "../../lib/uuid";
 import { deviceEnvironment, useDeviceHubAccess } from "../../state/device";
 import { useEnvironmentQuery } from "../../state/query";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useVirtualMachineState, virtualMachineEnvironment } from "../../state/virtualMachines";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
+import { VirtualMachinePreview } from "../vm/VirtualMachinePreview";
 import { DeviceStreamWebView, type DeviceStreamRef } from "./DeviceStreamWebView";
 import {
   selectedThreadDevicePreview,
   threadDevicePreviews,
   type ThreadDevicePreview,
 } from "./threadDevicePreviews";
+
+/** A VM preview key names a VM the user asked to open, before its session exists. */
+function requestedVirtualMachine(deviceKey: string | undefined) {
+  if (deviceKey === undefined) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(deviceKey);
+    return Array.isArray(parsed) && parsed[0] === "vm" && typeof parsed[1] === "string"
+      ? parsed[1]
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 import { createShakeDetector } from "./shakeDetector";
 
 const OVERLAY_ENTERING = FadeIn.duration(160).reduceMotion(ReduceMotion.System);
@@ -103,18 +118,84 @@ export function DevicePreviewScreen({
   const [controlsVisible, setControlsVisible] = useState(true);
   const retryHost = useAtomCommand(deviceEnvironment.list);
   const shutdown = useAtomCommand(deviceEnvironment.shutdown, { reportFailure: false });
+  const closeVirtualMachine = useAtomCommand(virtualMachineEnvironment.close, {
+    reportFailure: false,
+  });
+  const suspendVirtualMachine = useAtomCommand(virtualMachineEnvironment.stop, {
+    reportFailure: false,
+  });
   const streamRef = useRef<DeviceStreamRef>(null);
   const state = useEnvironmentQuery(deviceEnvironment.state({ environmentId, input: {} }));
-  const previews = threadDevicePreviews(state.data, threadId);
+  const virtualMachines = useVirtualMachineState(environmentId).data;
+  const [requested, setRequested] = useState(() => {
+    const name = requestedVirtualMachine(initialDeviceKey);
+    return name === undefined
+      ? undefined
+      : {
+          name,
+          closedSessionId: virtualMachines
+            ? (virtualMachines.closedSessions?.find(
+                (session) => session.threadId === threadId && session.name === name,
+              )?.id ?? null)
+            : undefined,
+        };
+  });
+  if (requested && requested.closedSessionId === undefined && virtualMachines) {
+    setRequested({
+      ...requested,
+      closedSessionId:
+        virtualMachines.closedSessions?.find(
+          (session) => session.threadId === threadId && session.name === requested.name,
+        )?.id ?? null,
+    });
+  }
+  const pendingRequest =
+    requested?.closedSessionId === undefined
+      ? undefined
+      : {
+          name: requested.name,
+          closedSessionId: requested.closedSessionId,
+        };
+  const previews = threadDevicePreviews(state.data, threadId, virtualMachines, pendingRequest);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- consumes a requested open once the server publishes its running session, closure, or access revocation
+  useEffect(() => {
+    if (!requested || !virtualMachines) return;
+    const closed = virtualMachines.closedSessions?.find(
+      (session) => session.threadId === threadId && session.name === requested.name,
+    );
+    const running = virtualMachines.machines.some(
+      (machine) =>
+        machine.name === requested.name &&
+        (machine.status === "ready" || machine.status === "running"),
+    );
+    if (
+      !virtualMachines.enabled ||
+      (closed && closed.id !== requested.closedSessionId) ||
+      (running &&
+        virtualMachines.sessions.some(
+          (session) => session.threadId === threadId && session.name === requested.name,
+        ))
+    ) {
+      // oxlint-disable-next-line react/set-state-in-effect -- Server session publication consumes the route's one-time open request.
+      setRequested(undefined);
+    }
+  }, [requested, virtualMachines, threadId]);
   const preview = selectedThreadDevicePreview(previews, selectedKey);
+  const devicePreview = preview?.kind === "device" ? preview : null;
   const onInputConnected = async (connected: boolean) => {
     setInputConnected(connected);
     if (!connected) setControlsVisible(true);
   };
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- closes the focused route through the navigator once the thread has no device previews
   useEffect(() => {
-    if (focused && state.data !== null && previews.length === 0) onClose();
-  }, [focused, state.data, previews.length, onClose]);
+    if (
+      focused &&
+      state.data !== null &&
+      (requested === undefined || requested.closedSessionId !== undefined) &&
+      previews.length === 0
+    )
+      onClose();
+  }, [focused, state.data, requested, previews.length, onClose]);
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- subscribes to the Accelerometer while focused to toggle controls on a shake
   useEffect(() => {
     if (!focused || !foreground || embedded) return;
@@ -133,22 +214,63 @@ export function DevicePreviewScreen({
   });
 
   const shutDownDevice = async () => {
-    if (!preview || shuttingDown) return;
+    if (!devicePreview || shuttingDown) return;
     setShuttingDown(true);
     const result = await shutdown({
       environmentId,
       input: {
-        hostId: preview.session.hostId,
-        deviceId: preview.session.deviceId,
-        platform: preview.session.platform,
+        hostId: devicePreview.session.hostId,
+        deviceId: devicePreview.session.deviceId,
+        platform: devicePreview.session.platform,
       },
     }).finally(() => setShuttingDown(false));
     if (result._tag === "Failure") {
       Dialog.alert("Could not shut down device", String(Cause.squash(result.cause)));
     }
   };
+  // Closing ends this thread's control of the VM; suspending also stops it for every thread.
+  const releaseVirtualMachine = async (suspend: boolean) => {
+    if (preview?.kind !== "vm" || shuttingDown) return;
+    setShuttingDown(true);
+    const result = await (
+      suspend
+        ? suspendVirtualMachine({ environmentId, input: { name: preview.name } })
+        : closeVirtualMachine({ environmentId, input: { name: preview.name, threadId } })
+    ).finally(() => setShuttingDown(false));
+    if (result._tag === "Failure") {
+      Dialog.alert(
+        suspend ? "Could not suspend virtual machine" : "Could not close virtual machine",
+        String(Cause.squash(result.cause)),
+      );
+      return;
+    }
+    if (requested?.name === preview.name) setRequested(undefined);
+  };
+  const virtualMachineControls: AppBarMenuItem[] = [
+    {
+      id: "reload",
+      title: "Reconnect",
+      icon: "arrow.clockwise" as const,
+      disabled: shuttingDown,
+      onPress: () => setStreamAttempt((attempt) => attempt + 1),
+    },
+    {
+      id: "close-vm",
+      title: "Close VM view",
+      icon: "xmark",
+      disabled: shuttingDown,
+      onPress: () => void releaseVirtualMachine(false),
+    },
+    {
+      id: "suspend-vm",
+      title: shuttingDown ? "Suspending…" : "Suspend VM",
+      icon: "power",
+      disabled: shuttingDown,
+      onPress: () => void releaseVirtualMachine(true),
+    },
+  ];
 
-  const controls: AppBarMenuItem[] = [
+  const deviceControls: AppBarMenuItem[] = [
     ...(state.data?.hosts
       .filter(
         (host) =>
@@ -184,16 +306,16 @@ export function DevicePreviewScreen({
           deviceToolUpdateOwnership +
             "\n\n" +
             deviceToolUpdatePolicy(
-              state.data?.hosts.find((host) => host.id === preview?.session.hostId)?.tools,
+              state.data?.hosts.find((host) => host.id === devicePreview?.session.hostId)?.tools,
             ) +
             "\n\n" +
             deviceToolVersionLabels(
-              state.data?.hosts.find((host) => host.id === preview?.session.hostId)?.tools,
+              state.data?.hosts.find((host) => host.id === devicePreview?.session.hostId)?.tools,
             ).join("\n") +
             "\n" +
-            (state.data?.hosts.find((host) => host.id === preview?.session.hostId)
+            (state.data?.hosts.find((host) => host.id === devicePreview?.session.hostId)
               ?.toolInspectionError ??
-              state.data?.hostStatuses[preview?.session.hostId ?? ""]?.detail ??
+              state.data?.hostStatuses[devicePreview?.session.hostId ?? ""]?.detail ??
               ""),
         ),
     },
@@ -207,7 +329,7 @@ export function DevicePreviewScreen({
         setStreamAttempt((attempt) => attempt + 1);
       },
     },
-    ...(preview?.session.platform === "android"
+    ...(devicePreview?.session.platform === "android"
       ? [
           {
             id: "back",
@@ -225,7 +347,7 @@ export function DevicePreviewScreen({
       disabled: !inputConnected,
       onPress: () => streamRef.current?.appSwitcher(),
     },
-    ...(preview?.session.platform === "ios"
+    ...(devicePreview?.session.platform === "ios"
       ? [
           {
             id: "rotate",
@@ -244,6 +366,7 @@ export function DevicePreviewScreen({
       onPress: () => void shutDownDevice(),
     },
   ];
+  const controls = preview?.kind === "vm" ? virtualMachineControls : deviceControls;
   const pressHome = () => streamRef.current?.home();
   const menuItems: AppBarMenuItem[] = [
     ...(previews.length > 1
@@ -282,11 +405,18 @@ export function DevicePreviewScreen({
           <View style={{ height: barOverlap }} />
         </>
       ) : null}
-      {preview && focused && foreground ? (
-        <OpenDevicePreview
+      {preview?.kind === "vm" && focused && foreground ? (
+        <VirtualMachinePreview
           key={`${preview.key}:${streamAttempt}`}
           environmentId={environmentId}
-          preview={preview}
+          threadId={threadId}
+          name={preview.name}
+        />
+      ) : devicePreview && focused && foreground ? (
+        <OpenDevicePreview
+          key={`${devicePreview.key}:${streamAttempt}`}
+          environmentId={environmentId}
+          preview={devicePreview}
           streamRef={streamRef}
           onInputConnected={onInputConnected}
         />
@@ -311,12 +441,14 @@ export function DevicePreviewScreen({
           className="flex-row items-center justify-center gap-2 px-3 py-2"
           style={{ paddingBottom: Math.max(insets.bottom, 8) }}
         >
-          <ControlPill
-            accessibilityLabel="Home"
-            icon="house"
-            disabled={!inputConnected}
-            onPress={pressHome}
-          />
+          {devicePreview ? (
+            <ControlPill
+              accessibilityLabel="Home"
+              icon="house"
+              disabled={!inputConnected}
+              onPress={pressHome}
+            />
+          ) : null}
           <DeviceOptionsMenu items={menuItems} />
         </View>
       ) : controlsVisible ? (
@@ -339,12 +471,14 @@ export function DevicePreviewScreen({
               <AppText numberOfLines={1} className="flex-1 text-center font-t3-medium text-base">
                 {preview?.name ?? "Devices"}
               </AppText>
-              <ControlPill
-                accessibilityLabel="Home"
-                icon="house"
-                disabled={!inputConnected}
-                onPress={pressHome}
-              />
+              {devicePreview ? (
+                <ControlPill
+                  accessibilityLabel="Home"
+                  icon="house"
+                  disabled={!inputConnected}
+                  onPress={pressHome}
+                />
+              ) : null}
               <DeviceOptionsMenu items={menuItems} />
             </GlassSurface>
           </View>
@@ -395,7 +529,7 @@ function OpenDevicePreview({
   onInputConnected,
 }: {
   readonly environmentId: EnvironmentId;
-  readonly preview: ThreadDevicePreview;
+  readonly preview: Extract<ThreadDevicePreview, { kind: "device" }>;
   readonly streamRef: RefObject<DeviceStreamRef | null>;
   readonly onInputConnected: (connected: boolean) => Promise<void>;
 }) {

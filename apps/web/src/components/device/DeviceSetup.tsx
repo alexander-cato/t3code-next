@@ -1,4 +1,7 @@
 import { DeviceHostUpdates } from "./DeviceHostUpdates";
+import { VirtualMachineSetup } from "../vm/VirtualMachineDeviceSection";
+import { useEnvironmentQuery } from "~/state/query";
+import { virtualMachineEnvironment, useVirtualMachinesSupported } from "~/state/virtualMachines";
 import type { DevicePlatform, DeviceServiceState, EnvironmentId } from "@t3tools/contracts";
 import { Check, CircleAlert } from "lucide-react";
 import { AuthSettingsWriteScope } from "@t3tools/contracts";
@@ -20,7 +23,7 @@ const platformName = (platform: DevicePlatform) => (platform === "ios" ? "iOS" :
 const deviceHubDescription =
   "Enable this environment to open simulators and emulators, whether they run here or on a remote device host.";
 const agentDeviceDescription =
-  "Allow new agent sessions in this environment to start and control local and remote devices, with required tools set up automatically.";
+  "Allow new agent sessions in this environment to start and control local and remote devices, including macOS virtual machines, with required tools set up automatically.";
 
 /** Platforms whose latest listing on a ready host may be missing devices. */
 export const incompleteListings = (
@@ -157,6 +160,15 @@ export function DeviceSetup(props: {
   const [step, setStep] = useState(0);
   const enabled = props.state.hostStatus !== "disabled";
   const { ready, busy } = deviceHubReadiness(props.state);
+  const virtualMachinesSupported = useVirtualMachinesSupported(props.environmentId);
+  const virtualMachines = useEnvironmentQuery(
+    virtualMachinesSupported
+      ? virtualMachineEnvironment.state({ environmentId: props.environmentId, input: {} })
+      : null,
+  ).data;
+  const virtualMachinesEnabled = virtualMachines?.enabled === true;
+  // macOS VMs need no device hub, so either one is enough to finish setup.
+  const usable = ready || (virtualMachines?.enabled === true && virtualMachines.available);
   const localPlatformsUnavailable = props.state.hosts.some(
     (host) => host.kind === "local" && !host.platforms.some((platform) => platform.available),
   );
@@ -178,10 +190,14 @@ export function DeviceSetup(props: {
     <>
       <WizardHeader
         title="Set up devices"
-        description="Review what runs on this environment before using simulators and emulators."
+        description={
+          virtualMachinesSupported
+            ? "Review what runs on this environment before using simulators, emulators, and macOS VMs."
+            : "Review what runs on this environment before using simulators and emulators."
+        }
       >
         <WizardSteps
-          steps={["Device hub", "Simulators", "Agent access"]}
+          steps={["Device hub", "Platforms", "Agent access"]}
           currentStep={step}
           onStepChange={setStep}
           isStepDisabled={(requested) => busy || pending !== null || requested > step}
@@ -194,7 +210,12 @@ export function DeviceSetup(props: {
           <section className="space-y-3 text-sm">
             <h3 className="font-medium">Enable the device hub</h3>
             <div className="flex items-start justify-between gap-4">
-              <p className="text-muted-foreground">{deviceHubDescription}</p>
+              <p className="text-muted-foreground">
+                {deviceHubDescription}
+                {virtualMachinesSupported
+                  ? " Leave it off to use only macOS virtual machines."
+                  : null}
+              </p>
               <Switch
                 checked={enabled}
                 disabled={!canConfigure || busy || pending !== null}
@@ -202,7 +223,7 @@ export function DeviceSetup(props: {
                 onCheckedChange={(checked) =>
                   void update("hub", {
                     enabled: Boolean(checked),
-                    ...(checked ? {} : { agentAccessEnabled: false }),
+                    ...(checked || virtualMachinesEnabled ? {} : { agentAccessEnabled: false }),
                   })
                 }
               />
@@ -214,13 +235,13 @@ export function DeviceSetup(props: {
           </section>
         ) : null}
 
-        {step === 1 || (step === 0 && enabled && localPlatformsUnavailable) ? (
+        {(step === 1 && enabled) || (step === 0 && enabled && localPlatformsUnavailable) ? (
           <section className={cn("space-y-3 text-sm", step === 0 && "mt-4")}>
             <h3 className="font-medium">Check simulator support</h3>
             <DevicePlatformSetup
               state={props.state}
               checking={pending === "check"}
-              disabled={!enabled || busy || pending !== null}
+              disabled={busy || pending !== null}
               onCheck={() => {
                 setPending("check");
                 void list({ environmentId: props.environmentId, input: {} }).finally(() =>
@@ -230,6 +251,16 @@ export function DeviceSetup(props: {
             />
           </section>
         ) : null}
+        {step === 1 && !enabled ? (
+          <p className="text-sm text-muted-foreground">
+            Simulators and emulators are off. Go back to turn on the device hub.
+          </p>
+        ) : null}
+        {step === 1 ? (
+          <div className="mt-4">
+            <VirtualMachineSetup environmentId={props.environmentId} />
+          </div>
+        ) : null}
 
         {step === 2 ? (
           <section className="space-y-3 text-sm">
@@ -238,7 +269,9 @@ export function DeviceSetup(props: {
               <p className="text-muted-foreground">{agentDeviceDescription}</p>
               <Switch
                 checked={props.state.agentAccessEnabled}
-                disabled={!canConfigure || !enabled || busy || pending !== null}
+                disabled={
+                  !canConfigure || (!enabled && !virtualMachinesEnabled) || busy || pending !== null
+                }
                 aria-label="Allow agents to control devices"
                 onCheckedChange={(checked) =>
                   void update("agent", { agentAccessEnabled: Boolean(checked) })
@@ -271,12 +304,15 @@ export function DeviceSetup(props: {
           </Button>
         )}
         {step < 2 ? (
-          <Button disabled={!ready || pending !== null} onClick={() => setStep(step + 1)}>
+          <Button
+            disabled={(step === 0 ? enabled && !ready : !usable) || busy || pending !== null}
+            onClick={() => setStep(step + 1)}
+          >
             Continue
           </Button>
         ) : (
           <Button
-            disabled={!canConfigure || !ready || pending !== null}
+            disabled={!canConfigure || !usable || pending !== null}
             onClick={() => void update("complete", { onboardingCompleted: true })}
           >
             {pending === "complete" ? "Saving…" : "Done"}

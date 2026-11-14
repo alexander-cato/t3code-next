@@ -4,6 +4,7 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import { ThreadId, TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
 import { SettingsSecretValue } from "./settingsSecretValue.ts";
+import { VirtualMachineName, VirtualMachineState } from "./virtualMachine.ts";
 
 export const DevicePlatform = Schema.Literals(["ios", "android"]);
 export type DevicePlatform = typeof DevicePlatform.Type;
@@ -630,11 +631,26 @@ export const DeviceError = Schema.Union([
 ]);
 export type DeviceError = typeof DeviceError.Type;
 
+const virtualMachineTarget = VirtualMachineName.annotate({
+  description: "macOS VM name from `device_list`. Targets that VM instead of a simulator.",
+});
+
 export const DeviceToolListResult = Schema.Struct({
   hostStatuses: DeviceHostStatuses,
   hosts: Schema.Array(DeviceHostSummary),
   devices: Schema.Array(DeviceSummary),
   open: Schema.Array(Schema.Struct({ hostId: DeviceHostId, deviceId: DeviceId })),
+  /** Present on environments that can run macOS VMs. */
+  virtualMachines: Schema.optional(
+    Schema.Struct({
+      enabled: VirtualMachineState.fields.enabled,
+      available: VirtualMachineState.fields.available,
+      unavailableReason: VirtualMachineState.fields.unavailableReason,
+      machines: VirtualMachineState.fields.machines,
+      operations: VirtualMachineState.fields.operations,
+      open: Schema.Array(VirtualMachineName),
+    }),
+  ),
 });
 export type DeviceToolListResult = typeof DeviceToolListResult.Type;
 
@@ -652,18 +668,22 @@ export const DeviceToolOpenInput = Schema.Struct({
   hostId: Schema.optional(
     DeviceHostId.annotate({ description: "Host from `device_list`. Default local." }),
   ),
+  virtualMachine: Schema.optional(virtualMachineTarget),
 });
 export type DeviceToolOpenInput = typeof DeviceToolOpenInput.Type;
 
-export const DeviceToolOpenResult = Schema.Struct({
-  device: DeviceSummary,
-  agentDevice: Schema.Struct({
-    command: Schema.String,
-    targetArgs: Schema.Array(Schema.String),
-    session: Schema.String,
+export const DeviceToolOpenResult = Schema.Union([
+  Schema.Struct({
+    device: DeviceSummary,
+    agentDevice: Schema.Struct({
+      command: Schema.String,
+      targetArgs: Schema.Array(Schema.String),
+      session: Schema.String,
+    }),
+    quickStart: Schema.String,
   }),
-  quickStart: Schema.String,
-});
+  Schema.Struct({ virtualMachine: VirtualMachineName, quickStart: Schema.String }),
+]);
 export type DeviceToolOpenResult = typeof DeviceToolOpenResult.Type;
 
 export const DeviceToolTargetInput = Schema.Struct({
@@ -673,18 +693,20 @@ export const DeviceToolTargetInput = Schema.Struct({
     }),
   ),
   hostId: Schema.optional(DeviceHostId),
+  virtualMachine: Schema.optional(virtualMachineTarget),
 });
 export type DeviceToolTargetInput = typeof DeviceToolTargetInput.Type;
 
-export const DeviceToolScreenshotResult = Schema.Struct({
-  device: DeviceSummary,
-  screenshot: Schema.Struct({
-    mimeType: Schema.Literal("image/png"),
-    data: Schema.String,
-    width: Schema.Int,
-    height: Schema.Int,
-  }),
+const DeviceToolScreenshot = Schema.Struct({
+  mimeType: Schema.Literal("image/png"),
+  data: Schema.String,
+  width: Schema.Int,
+  height: Schema.Int,
 });
+export const DeviceToolScreenshotResult = Schema.Union([
+  Schema.Struct({ device: DeviceSummary, screenshot: DeviceToolScreenshot }),
+  Schema.Struct({ virtualMachine: VirtualMachineName, screenshot: DeviceToolScreenshot }),
+]);
 export type DeviceToolScreenshotResult = typeof DeviceToolScreenshotResult.Type;
 
 export const DeviceToolCloseInput = Schema.Struct({
@@ -694,9 +716,10 @@ export const DeviceToolCloseInput = Schema.Struct({
     }),
   ),
   hostId: Schema.optional(DeviceHostId),
+  virtualMachine: Schema.optional(virtualMachineTarget),
   shutdown: Schema.optional(
     Schema.Boolean.annotate({
-      description: "Also turn it off. Default false.",
+      description: "Also turn it off. A VM is suspended. Default false.",
     }),
   ),
 });

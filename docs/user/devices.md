@@ -1,9 +1,9 @@
 # Devices
 
-The Device panel shows a live iOS Simulator or Android Emulator next to a
-thread, so you can watch an agent verify mobile work and tap the device
-yourself. Agents get the same device through `device_*` tools and the
-`agent-device` command line, which T3 Code sets up for them.
+The Device panel shows a live iOS Simulator, Android Emulator, or macOS
+virtual machine next to a thread, so you can watch an agent verify its work and
+use the device yourself. Agents get the same device through `device_*` tools and
+the `agent-device` command line, which T3 Code sets up for them.
 
 ## Open a device
 
@@ -88,6 +88,43 @@ receives the device CLI environment.
 To keep agents away from simulators, turn off **Agents can use devices** in
 **Settings → Devices**. This hides the device tools from agents
 started from then on; your own Device panel is unaffected.
+
+## macOS virtual machines
+
+A macOS VM is a separate Mac for testing desktop apps while you keep using your
+own. It appears in the Device panel beside simulators and emulators. The
+environment server must run on an Apple silicon Mac with
+[Lume](https://cua.ai/docs/lume/quickstart) and
+[Cua](https://cua.ai/docs/cua-cli) 0.4 or later installed, including when you
+connect from another computer or your phone.
+
+Turn on **macOS virtual machines** during device setup, in **Settings →
+Devices**, or with **Turn on** in the Device panel, then choose **Create VM**.
+Setup does not need the device hub if you only want VMs.
+VMs run macOS Tahoe with four CPUs and 8 GB of memory. Allow at least 60 GB free
+for the first image download and guest disk; Apple allows two running macOS VMs
+at a time. Host folders and your clipboard are not shared.
+
+Choose **Open** or **Start** next to a VM to watch and control its desktop in a
+device tab. Like a device, it can save a screenshot or **Float VM over chat**.
+Switching tabs keeps a VM's desktop connected, so it shows at once when you
+return. Closing the tab ends the thread's control and leaves the VM running.
+**Suspend** releases its CPU and memory and closes its views in every thread;
+opening it again resumes it. **Delete** removes the VM and its files. Turning
+VMs off closes their views without deleting or stopping them. VMs you manage
+with your own Cua commands are not listed.
+
+When **Agents can use devices** is on, agents open VMs with `device_open`, which
+floats the VM over the chat or opens a tab the same way as a device. They drive
+the desktop with `vm_control`, run guest commands with `vm_exec`, and copy files
+from the thread's workspace with `vm_upload`. Source editing and Git stay in your
+workspace. Install Xcode inside the guest if a build needs the full toolchain,
+and grant the test app's Accessibility or Screen Recording permissions there when
+prompted.
+
+In the mobile app, the thread's **Devices** menu lists what is open and starts
+or opens any VM. The viewer can reconnect, close the thread's view, or suspend
+the VM. Create, delete, and turn VMs on from web or desktop.
 
 ## Remote connections
 
