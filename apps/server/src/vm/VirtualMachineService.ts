@@ -170,6 +170,10 @@ const adoptedLumeRecord = (input: {
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const jobDirectory = (id: string) => `"$HOME/.t3-vm-jobs/${id}"`;
+// A saved PID alone does not name the job: after a guest reboot the job directory survives
+// and the number can belong to an unrelated process. The boot session and the process's
+// start time together do, so a job is only inspected or signalled while both still match.
+const processIdentity = `ident() { echo "$(sysctl -n kern.bootsessionuuid 2>/dev/null) $(ps -o lstart= -p "$1" 2>/dev/null)"; }`;
 
 export const startJobScript = (jobId: string, command: string, cwd: string | undefined) => {
   const directory = jobDirectory(jobId);
@@ -180,7 +184,9 @@ export const startJobScript = (jobId: string, command: string, cwd: string | und
     `d=${directory}; mkdir -p "$d" || exit 1`,
     `printf '%s\\n' ${shellQuote(command)} > "$d/command"`,
     `( trap '' HUP; { ${cwd ? `cd ${shellQuote(cwd)} && ` : ""}sh "$d/command"; } > "$d/log" 2>&1 < /dev/null; echo $? > "$d/exit.tmp"; mv "$d/exit.tmp" "$d/exit" ) > /dev/null 2>&1 &`,
-    `echo $! > "$d/pid"; echo "$d/log"`,
+    // The identity is written before the PID, so a reader that finds a PID also finds it.
+    processIdentity,
+    `j=$!; ident "$j" > "$d/id"; echo "$j" > "$d/pid"; echo "$d/log"`,
   ].join("\n");
 };
 
@@ -188,6 +194,9 @@ export const readJobScript = (jobId: string, tailBytes: number, stop: boolean) =
   [
     `d=${jobDirectory(jobId)}; [ -d "$d" ] || { echo "T3JOB missing"; exit 0; }`,
     `p=$(cat "$d/pid" 2>/dev/null); t=`,
+    processIdentity,
+    // True only while the saved PID is still the process this job started.
+    `own() { [ -n "$p" ] && [ -f "$d/id" ] && [ "$(cat "$d/id")" = "$(ident "$p")" ] && kill -0 "$p" 2>/dev/null; }`,
     // Every process the stop signalled; the job counts as running while one survives.
     `alive() { for q in $t; do kill -0 "$q" 2>/dev/null && return 0; done; return 1; }`,
     // Stopping ends the command's whole process tree, deepest first, and leaves the
@@ -199,13 +208,13 @@ export const readJobScript = (jobId: string, tailBytes: number, stop: boolean) =
           `tree() { for c in $(pgrep -P "$1"); do tree "$c"; done; echo "$1"; }`,
           `jobtree() { for c in $(pgrep -P "$p"); do tree "$c"; done; }`,
           `settle() { i=0; while { alive || [ ! -f "$d/exit" ]; } && [ $i -lt 10 ]; do sleep 0.5; i=$((i+1)); done; }`,
-          `if [ ! -f "$d/exit" ] && [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then`,
+          `if [ ! -f "$d/exit" ] && own; then`,
           `  t=$(jobtree); [ -n "$t" ] && kill -TERM $t 2>/dev/null; settle`,
           `  if alive || [ ! -f "$d/exit" ]; then t="$t $(jobtree)"; for q in $t; do kill -0 "$q" 2>/dev/null && kill -KILL "$q" 2>/dev/null; done; settle; fi`,
           `fi`,
         ]
       : []),
-    `if alive; then echo "T3JOB running"; elif [ -f "$d/exit" ]; then echo "T3JOB exited $(cat "$d/exit")"; elif [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then echo "T3JOB running"; else echo "T3JOB lost"; fi`,
+    `if alive; then echo "T3JOB running"; elif [ -f "$d/exit" ]; then echo "T3JOB exited $(cat "$d/exit")"; elif own; then echo "T3JOB running"; else echo "T3JOB lost"; fi`,
     `echo "$d/log"; tail -c ${tailBytes} "$d/log" 2>/dev/null`,
   ].join("\n");
 

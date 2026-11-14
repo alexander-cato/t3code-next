@@ -1,0 +1,196 @@
+name: Security
+
+# Each scan covers only what the change introduces, so upstream's existing code cannot fail every
+# nightly sync. The nightly sync dispatches this workflow on its candidate, like CI, and its merger
+# requires `Security check` to pass on the exact head.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact nightly candidate commit to check
+        type: string
+        required: true
+      base_sha:
+        description: Exact main commit the nightly PR is based on
+        type: string
+        required: true
+      pull_request:
+        description: Nightly sync PR number
+        type: string
+        required: true
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.event.pull_request.number || inputs.pull_request || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
+
+jobs:
+  scope:
+    name: Scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      base: ${{ steps.range.outputs.base }}
+      head: ${{ steps.range.outputs.head }}
+    steps:
+      - name: Checkout
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          sparse-checkout: |
+            /.github/scripts/validate-nightly-dispatch.cjs
+          sparse-checkout-cone-mode: false
+
+      - name: Validate explicit nightly dispatch
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          BASE_SHA: ${{ inputs.base_sha }}
+          PULL_NUMBER: ${{ inputs.pull_request }}
+        with:
+          script: |
+            const { validateNightlyDispatch } = require('./.github/scripts/validate-nightly-dispatch.cjs');
+            await validateNightlyDispatch({ github, context,
+              expectedSha: process.env.EXPECTED_SHA, baseSha: process.env.BASE_SHA,
+              pullNumber: process.env.PULL_NUMBER });
+
+      - name: Resolve the commits the change introduces
+        id: range
+        env:
+          BASE: ${{ github.event_name == 'workflow_dispatch' && inputs.base_sha || github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event_name == 'workflow_dispatch' && inputs.expected_sha || github.event.pull_request.head.sha || github.sha }}
+        run: |
+          for sha in "$BASE" "$HEAD"; do
+            if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || [ "$sha" = 0000000000000000000000000000000000000000 ]; then
+              echo "::error::Cannot scope the scan: base '$BASE', head '$HEAD'."
+              exit 1
+            fi
+          done
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "head=$HEAD" >> "$GITHUB_OUTPUT"
+
+  codeql:
+    name: CodeQL (${{ matrix.language }})
+    needs: scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      pull-requests: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript, actions]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          config-file: ./.github/codeql/codeql-config.yml
+
+      # Only pushes to main upload, which keeps the code scanning baseline on main and leaves PRs
+      # without a second, separately configured CodeQL check.
+      - name: Analyze
+        uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          output: ${{ runner.temp }}/codeql-results
+          upload: ${{ github.event_name == 'push' && 'always' || 'never' }}
+
+      # The analyzed tree is the PR merge commit, the nightly candidate, or the pushed main commit,
+      # so diffing it against the base gives exactly the lines it adds.
+      - name: Fail on high-severity results in added lines
+        env:
+          BASE: ${{ needs.scope.outputs.base }}
+          RESULTS: ${{ runner.temp }}/codeql-results
+        run: |
+          git fetch --no-tags --quiet --depth=1 origin "$BASE"
+          git diff -U0 --no-color --no-ext-diff "$BASE" HEAD > "$RUNNER_TEMP/introduced.diff"
+          node .github/scripts/codeql-gate.cjs "$RESULTS" "$RUNNER_TEMP/introduced.diff" 7.0
+
+  dependency_review:
+    name: Dependency review
+    needs: scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Review dependency changes
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          base-ref: ${{ needs.scope.outputs.base }}
+          head-ref: ${{ needs.scope.outputs.head }}
+          fail-on-severity: high
+          license-check: false
+          comment-summary-in-pr: never
+          show-openssf-scorecard: false
+
+  secrets:
+    name: Secret scan
+    needs: scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+    steps:
+      # Full history so every commit in the range is available. Only the ignore file is checked out.
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          sparse-checkout: |
+            /.gitleaksignore
+          sparse-checkout-cone-mode: false
+
+      - name: Install gitleaks
+        run: |
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$archive"
+          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+
+      # Reviewed false positives go in .gitleaksignore by the fingerprint gitleaks prints.
+      - name: Scan the commits the change introduces
+        env:
+          BASE: ${{ needs.scope.outputs.base }}
+          HEAD: ${{ needs.scope.outputs.head }}
+        run: |
+          "$RUNNER_TEMP/gitleaks" git --no-banner --redact --verbose \
+            --log-opts="$BASE..$HEAD" .
+
+  # The nightly merger requires this job. A cancelled or skipped scan must still fail it.
+  security:
+    name: Security check
+    if: ${{ always() }}
+    needs: [scope, codeql, dependency_review, secrets]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require every scan to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$RESULTS" | jq -e 'all(.[]; .result == "success")' > /dev/null
