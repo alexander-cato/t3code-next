@@ -1,4 +1,5 @@
 import * as Dialog from "../../components/ui/Dialog";
+import { useThreadDevicesMenu } from "../devices/useThreadDevicesMenu";
 import { useRememberThreadProject } from "./useRememberThreadProject";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
@@ -793,6 +794,7 @@ function ThreadRouteContent(
       terminalId: targetTerminalId,
     });
   };
+  const devicesMenu = useThreadDevicesMenu(environmentId, selectedThread?.id ?? null);
   const threadGitControlProps = {
     environmentId: environmentIdRaw ?? "",
     threadId: threadId ?? "",
@@ -818,6 +820,7 @@ function ThreadRouteContent(
     terminalSessions: terminalMenuSessions,
     onOpenTerminal: handleOpenTerminal,
     onOpenNewTerminal: handleOpenNewTerminal,
+    devicesMenu,
     onRunProjectScript: handleRunProjectScript,
     onPull: gitActions.onPullSelectedThreadBranch,
     onRunAction: gitActions.onRunSelectedThreadGitAction,

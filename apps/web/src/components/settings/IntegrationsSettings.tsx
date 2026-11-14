@@ -1,3 +1,5 @@
+import { useAtomValue } from "@effect/atom-react";
+
 import { DeviceHostUpdates } from "../device/DeviceHostUpdates";
 import { DeviceToolVersions } from "../device/DeviceToolVersions";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
@@ -51,7 +53,8 @@ import { useEnvironments, usePrimaryEnvironment } from "~/state/environments";
 import { deviceEnvironment, useDeviceState } from "~/state/device";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { formatEnvironmentQueryError } from "~/state/query";
+import { formatEnvironmentQueryError, useEnvironmentQuery } from "~/state/query";
+import { virtualMachineEnvironment, useVirtualMachinesSupported } from "~/state/virtualMachines";
 import { previewEnvironment } from "~/state/preview";
 import { useServerConfigs } from "~/state/entities";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -824,6 +827,7 @@ function DeviceIntegrationSettings() {
           enabled={settings.enableDeviceSupport}
           agentAccessEnabled={settings.enableAgentDeviceAccess}
         />
+        <VirtualMachineAccessSetting />
       </SettingsSection>
       <DeviceSourcesSettings
         supportsEas={state.supportsEasHosts === true}
@@ -850,6 +854,14 @@ function DeviceIntegrationControls({
   const anyHubEnabled = connectedEnvironments.some(
     (environment) => environment.serverConfig?.settings.enableDeviceSupport,
   );
+  // macOS VMs need no device hub, so agents can use devices when either one is on.
+  const virtualMachinesSupported = useVirtualMachinesSupported(environmentId);
+  const virtualMachinesEnabled =
+    useEnvironmentQuery(
+      virtualMachinesSupported && environmentId
+        ? virtualMachineEnvironment.state({ environmentId, input: {} })
+        : null,
+    ).data?.enabled === true;
   const configure = useAtomCommand(deviceEnvironment.configure, { reportFailure: false });
   const list = useAtomCommand(deviceEnvironment.list, { reportFailure: false });
   const [pending, setPending] = useState<
@@ -980,7 +992,7 @@ function DeviceIntegrationControls({
               onCheckedChange={(checked) =>
                 void update("hub", {
                   enabled: Boolean(checked),
-                  ...(checked ? {} : { agentAccessEnabled: false }),
+                  ...(checked || virtualMachinesEnabled ? {} : { agentAccessEnabled: false }),
                 })
               }
             />
@@ -1010,7 +1022,8 @@ function DeviceIntegrationControls({
               disabled={
                 !canConfigure ||
                 connectedEnvironments.length === 0 ||
-                (!projectScope && (!loaded || !anyHubEnabled || busy)) ||
+                (!projectScope &&
+                  (!loaded || (!anyHubEnabled && !virtualMachinesEnabled) || busy)) ||
                 pending !== null
               }
               aria-label="Agent device access"
@@ -1030,6 +1043,108 @@ function DeviceIntegrationControls({
         />
       ) : null}
     </>
+  );
+}
+
+function VirtualMachineAccessSetting() {
+  const { environment, environments } = useSettingsScope();
+  const environmentId =
+    environments.length === 1 && environment?.connection.phase === "connected"
+      ? environment.environmentId
+      : null;
+  const supported = useVirtualMachinesSupported(environmentId);
+  const query = useEnvironmentQuery(
+    supported && environmentId
+      ? virtualMachineEnvironment.state({ environmentId, input: {} })
+      : null,
+  );
+  const canConfigure = useAtomValue(
+    virtualMachineEnvironment.configure.permissionAtom(environmentId),
+  );
+  const configure = useAtomCommand(virtualMachineEnvironment.configure, {
+    reportFailure: false,
+  });
+  const [pending, setPending] = useState(false);
+  const state = query.data;
+  const creating = state?.operations.some((operation) => operation.status === "creating") ?? false;
+  const disabled = !supported || !canConfigure || state === null || pending || creating;
+
+  const setEnabled = async (enabled: boolean) => {
+    if (!environmentId || disabled) return;
+    setPending(true);
+    const result = await configure({ environmentId, input: { enabled } }).finally(() =>
+      setPending(false),
+    );
+    if (result._tag === "Failure") {
+      toastManager.add({
+        type: "error",
+        title: "Could not change virtual machine access",
+        description: formatEnvironmentQueryError(result.cause),
+      });
+    }
+  };
+
+  return (
+    <SettingsRow
+      serverScoped
+      {...searchableSetting("virtual-machine-access")}
+      description="Run local macOS VMs on this environment through Lume and Cua. Agents control them when they can use devices. Turning this off closes VM views without deleting disks or stopping running VMs."
+      control={
+        <Switch
+          aria-label="Virtual machine access"
+          checked={state?.enabled ?? false}
+          disabled={disabled}
+          onCheckedChange={(enabled) => void setEnabled(enabled)}
+        />
+      }
+    >
+      {environments.length !== 1 ? (
+        <p className="text-sm text-muted-foreground">
+          Select one environment to change virtual machine access.
+        </p>
+      ) : !environmentId ? (
+        <p className="text-sm text-muted-foreground">
+          Reconnect the selected environment to change virtual machine access.
+        </p>
+      ) : !supported ? (
+        <p className="text-sm text-muted-foreground">
+          Update this environment's T3 Code server to use virtual machines.
+        </p>
+      ) : query.error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {query.error}
+        </p>
+      ) : state === null ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Loading virtual machine access…
+        </p>
+      ) : pending ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Updating virtual machine access…
+        </p>
+      ) : state?.unavailableReason ? (
+        <p className="text-sm text-muted-foreground">
+          {state.unavailableReason}{" "}
+          <a
+            href="https://cua.ai/docs/lume/quickstart"
+            target="_blank"
+            rel="noreferrer"
+            className="underline underline-offset-4"
+          >
+            Setup guide
+          </a>
+        </p>
+      ) : creating ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          Wait for virtual machine creation to finish before changing access.
+        </p>
+      ) : null}
+      {environmentId && supported && !canConfigure ? (
+        <p className="text-sm text-muted-foreground">
+          This connection does not have permission to change virtual machine access.
+        </p>
+      ) : null}
+    </SettingsRow>
   );
 }
 

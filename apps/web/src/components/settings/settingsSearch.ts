@@ -995,6 +995,14 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["allow disable enable open drive preview tools sessions project override"],
   },
   {
+    id: "virtual-machine-access",
+    title: "macOS virtual machines",
+    to: "/settings/devices",
+    targetId: "devices",
+    scope: "environment",
+    searchTerms: ["virtual machines vm macos lume cua agents enable disable control disks"],
+  },
+  {
     id: "device-sources",
     title: "Device sources",
     to: "/settings/devices",

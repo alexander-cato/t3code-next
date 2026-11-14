@@ -19,6 +19,7 @@ import {
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -43,6 +44,7 @@ import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ManagedPolicy from "../policy/ManagedPolicy.ts";
 
 import * as DeviceService from "../device/DeviceService.ts";
+import * as VirtualMachineService from "../vm/VirtualMachineService.ts";
 import * as PullRequestReviewGuideService from "../pullRequest/PullRequestReviewGuideService.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -57,6 +59,21 @@ import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import { PreviewToolkit } from "./toolkits/preview/tools.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
+
+// Device tools also reach VMs; these tests run as a host that cannot run any.
+const layerNoVirtualMachines = Layer.mergeAll(
+  Layer.succeed(HostProcess.Platform, "linux"),
+  Layer.mock(VirtualMachineService.VirtualMachineService)({
+    state: Effect.succeed({
+      enabled: false,
+      available: false,
+      unavailableReason: null,
+      machines: [],
+      sessions: [],
+      operations: [],
+    }),
+  }),
+);
 
 const environmentId = EnvironmentId.make("environment-mcp-test");
 const threadId = ThreadId.make("thread-mcp-test");
@@ -232,7 +249,9 @@ it.effect.each([
       Effect.provide(
         McpHttpServer.layerDeviceToolkit.pipe(
           Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+          Layer.provide(ServerSettings.layerTest({ enableAgentDeviceAccess: true })),
           Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
+          Layer.provide(layerNoVirtualMachines),
           Layer.provide(
             Layer.mock(DeviceService.DeviceService)({
               locateSession: () => Effect.succeedNone,

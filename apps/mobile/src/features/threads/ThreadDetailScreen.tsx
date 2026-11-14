@@ -140,6 +140,7 @@ import {
 import { editPendingThreadMessage } from "../../state/edit-pending-thread-message";
 import { deviceEnvironment } from "../../state/device";
 import { useEnvironmentQuery } from "../../state/query";
+import { useVirtualMachineState } from "../../state/virtualMachines";
 import { threadDevicePreviews } from "../devices/threadDevicePreviews";
 import { ThreadBrowserFloat } from "../browser/ThreadBrowserFloat";
 import { useThreadServerBrowserTabs } from "../../state/preview";
@@ -426,7 +427,12 @@ function ThreadDetailBody(
   const deviceState = useEnvironmentQuery(
     deviceEnvironment.state({ environmentId: props.environmentId, input: {} }),
   );
-  const devicePreviews = threadDevicePreviews(deviceState.data, props.selectedThread.id);
+  const virtualMachines = useVirtualMachineState(props.environmentId).data;
+  const devicePreviews = threadDevicePreviews(
+    deviceState.data,
+    props.selectedThread.id,
+    virtualMachines,
+  );
   const openDevicePreview = () => {
     Keyboard.dismiss();
     if (

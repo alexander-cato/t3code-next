@@ -8,10 +8,15 @@ import {
   type DeviceSummary,
   DeviceToolUnavailableError,
   LOCAL_DEVICE_HOST_ID,
+  type ThreadId,
+  type VirtualMachineError,
 } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as DeviceService from "../../../device/DeviceService.ts";
+import * as VirtualMachineService from "../../../vm/VirtualMachineService.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import { threadWorkspaceRoot } from "../../../project/threadWorkspaceRoot.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
@@ -84,15 +89,29 @@ export function agentDeviceQuickStart(
   ].join("\n");
 }
 
-const requireDeviceAccess = McpInvocationContext.requireThreadMcpCapability("device").pipe(
-  Effect.mapError(
-    () =>
-      new DeviceToolUnavailableError({
-        reason:
-          "Agent device access is turned off for this environment. Ask the user to turn on Agent device access in Settings > Integrations > Devices; it applies when the agent session next starts, such as in a new thread.",
-      }),
-  ),
-);
+const agentDeviceAccessDisabled = () =>
+  new DeviceToolUnavailableError({
+    reason:
+      "Agent device access is turned off for this environment. Ask the user to turn on Agent device access in Settings > Integrations > Devices; it applies when the agent session next starts, such as in a new thread.",
+  });
+
+export const requireDeviceAccess = Effect.gen(function* () {
+  const scope = yield* McpInvocationContext.requireThreadMcpCapability("device").pipe(
+    Effect.mapError(agentDeviceAccessDisabled),
+  );
+  const settings = yield* ServerSettings.ServerSettingsService;
+  const current = yield* settings.getSettings.pipe(
+    Effect.mapError(
+      () =>
+        new DeviceToolUnavailableError({
+          reason:
+            "Agent device access could not be checked. Try again after the environment reconnects.",
+        }),
+    ),
+  );
+  if (!current.enableAgentDeviceAccess) return yield* agentDeviceAccessDisabled();
+  return scope;
+});
 
 export const resolveHostId = Effect.fn("handlers.resolveHostId")(function* (
   hosts: ReadonlyArray<DeviceHostSummary>,
@@ -211,7 +230,58 @@ const pickDevice = Effect.fn("handlers.pickDevice")(function* (
   return candidates.find((device) => device.booted) ?? candidates[0]!;
 });
 
-const toolError = (error: DeviceError | DeviceToolUnavailableError) => error;
+const toolError = (error: DeviceError | DeviceToolUnavailableError | VirtualMachineError) => error;
+
+const VIRTUAL_MACHINE_QUICK_START = [
+  "The user is watching this macOS VM in the Device panel. Everything runs inside the guest, not on the host Mac.",
+  "Use vm_tools for the Cua desktop tool schemas, vm_control for guest input, vm_exec for guest shell commands, vm_upload to copy a workspace file in, and device_screenshot with virtualMachine to look.",
+  "Source editing and Git stay in the working repository; transfer only the source or build artifacts needed for testing. Grant the test app's Accessibility and Screen Recording permissions inside the guest when needed.",
+  "Replay drags, shortcuts and animations before reporting them verified. device_close with shutdown: true suspends the VM.",
+].join("\n");
+
+const hostRunsVirtualMachines = Effect.gen(function* () {
+  return (
+    (yield* HostProcess.Platform) === "darwin" && (yield* HostProcess.Architecture) === "arm64"
+  );
+});
+
+/** VMs are listed beside devices only where Lume can run them. */
+const listVirtualMachines = Effect.fn("handlers.listVirtualMachines")(function* (
+  threadId: ThreadId,
+) {
+  if (!(yield* hostRunsVirtualMachines)) return undefined;
+  const vms = yield* VirtualMachineService.VirtualMachineService;
+  // A failed inventory refresh still reports the last known machines.
+  const state = yield* vms.list.pipe(Effect.catch(() => vms.state));
+  return {
+    enabled: state.enabled,
+    available: state.available,
+    unavailableReason: state.unavailableReason,
+    machines: state.machines,
+    operations: state.operations,
+    open: state.sessions
+      .filter((session) => session.threadId === threadId)
+      .map((session) => session.name),
+  };
+});
+
+const openVirtualMachineNames = Effect.fn("handlers.openVirtualMachineNames")(function* (
+  threadId: ThreadId,
+) {
+  const vms = yield* VirtualMachineService.VirtualMachineService;
+  return (yield* vms.state).sessions
+    .filter((session) => session.threadId === threadId)
+    .map((session) => session.name);
+});
+
+const vmScreenshot = Effect.fn("handlers.vmScreenshot")(function* (
+  threadId: ThreadId,
+  name: string,
+) {
+  const vms = yield* VirtualMachineService.VirtualMachineService;
+  const shot = yield* vms.screenshot(threadId, name);
+  return { virtualMachine: shot.name, screenshot: shot.screenshot };
+});
 
 const handlers = {
   device_list: McpToolAccess.readsAsCaller((input) =>
@@ -219,7 +289,8 @@ const handlers = {
       const scope = yield* requireDeviceAccess;
       const devices = yield* DeviceService.DeviceService;
       const state = yield* devices.list;
-      if (state.hostStatus === "disabled") {
+      const virtualMachines = yield* listVirtualMachines(scope.thread.threadId);
+      if (state.hostStatus === "disabled" && !virtualMachines?.enabled) {
         return yield* new DeviceToolUnavailableError({
           reason:
             "Device support is off. Ask the user to enable it in the Device panel before installing or starting device tools.",
@@ -238,12 +309,18 @@ const handlers = {
           ? state.devices.filter((device) => device.hostId === hostId)
           : state.devices,
         open,
+        ...(virtualMachines === undefined ? {} : { virtualMachines }),
       };
     }).pipe(Effect.mapError(toolError)),
   ),
   device_open: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const scope = yield* requireDeviceAccess;
+      if (input.virtualMachine !== undefined) {
+        const vms = yield* VirtualMachineService.VirtualMachineService;
+        yield* vms.open({ name: input.virtualMachine, threadId: scope.thread.threadId });
+        return { virtualMachine: input.virtualMachine, quickStart: VIRTUAL_MACHINE_QUICK_START };
+      }
       const devices = yield* DeviceService.DeviceService;
       const state = yield* devices.list;
       if (state.hostStatus === "disabled") {
@@ -320,8 +397,10 @@ const handlers = {
   device_screenshot: McpToolAccess.readsAsCaller((input) =>
     Effect.gen(function* () {
       const scope = yield* requireDeviceAccess;
-      const devices = yield* DeviceService.DeviceService;
       const threadId = scope.thread.threadId;
+      if (input.virtualMachine !== undefined)
+        return yield* vmScreenshot(threadId, input.virtualMachine);
+      const devices = yield* DeviceService.DeviceService;
       const hostId =
         input.hostId === undefined
           ? undefined
@@ -336,6 +415,11 @@ const handlers = {
                 .locateSession({ threadId, deviceId: input.deviceId, hostId })
                 .pipe(mapLocateErrors),
             );
+      if (!target && input.deviceId === undefined && hostId === undefined) {
+        const openVirtualMachine = (yield* openVirtualMachineNames(threadId)).at(-1);
+        if (openVirtualMachine !== undefined)
+          return yield* vmScreenshot(threadId, openVirtualMachine);
+      }
       if (!target) {
         return yield* new DeviceToolUnavailableError({
           reason:
@@ -358,6 +442,14 @@ const handlers = {
   device_close: McpToolAccess.actsAsCaller((input) =>
     Effect.gen(function* () {
       const scope = yield* requireDeviceAccess;
+      const threadId = scope.thread.threadId;
+      const vms = yield* VirtualMachineService.VirtualMachineService;
+      const closeVirtualMachine = (name: string) =>
+        input.shutdown ? vms.stop(name) : vms.close({ name, threadId });
+      if (input.virtualMachine !== undefined) {
+        yield* closeVirtualMachine(input.virtualMachine);
+        return {};
+      }
       const devices = yield* DeviceService.DeviceService;
       const deviceId = input.deviceId;
       const inputHostId =
@@ -377,6 +469,11 @@ const handlers = {
         ...(deviceId === undefined ? {} : { deviceId }),
         ...(input.shutdown === undefined ? {} : { shutdown: input.shutdown }),
       });
+      // Closing everything here includes this thread's VMs.
+      if (deviceId === undefined && inputHostId === undefined) {
+        for (const name of yield* openVirtualMachineNames(threadId))
+          yield* closeVirtualMachine(name);
+      }
       return {};
     }).pipe(Effect.mapError(toolError)),
   ),

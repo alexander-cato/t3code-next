@@ -3,8 +3,10 @@ import { previewPdfAssetUrl } from "@t3tools/shared/preview";
 import { useEnvironmentHttpBaseUrl } from "~/state/environments";
 import { PanelRightIcon, PictureInPicture2, XIcon } from "lucide-react";
 import {
+  lazy,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
+  Suspense,
   useEffect,
   useRef,
   useState,
@@ -79,6 +81,14 @@ interface PointerGesture {
 }
 
 const HANDLE_TAP_SLOP_PX = 6;
+
+const VirtualMachineDeviceView = lazy(() =>
+  import("../vm/VirtualMachineDeviceView").then((module) => ({
+    default: module.VirtualMachineDeviceView,
+  })),
+);
+// Lume's default display, until the stream reports its own.
+const DEFAULT_VIRTUAL_MACHINE_SIZE: PreviewMiniPlayerSize = { width: 1024, height: 768 };
 
 interface Props {
   readonly threadRef: ScopedThreadRef;
@@ -172,6 +182,11 @@ export function useThreadPreviewCanvasSource(
     source?.kind === "browser" ? source.tabId : null,
   );
   const sourceKey = source ? previewMiniPlayerSourceKey(source) : null;
+  const streamedSize = useStreamedSourceSize((state) =>
+    threadRef && sourceKey !== null && state?.key === streamedSourceKey(threadRef, sourceKey)
+      ? state.viewport
+      : null,
+  );
   const screen = useAtomValue(
     threadRef && source?.kind === "device"
       ? deviceStreamScreenAtom(miniPlayerDeviceViewId(threadRef, source))
@@ -187,12 +202,23 @@ export function useThreadPreviewCanvasSource(
     source:
       source.kind === "browser"
         ? browser.sourceSize
-        : resolveDeviceMiniPlayerSourceSize(source.platform, screen),
+        : source.kind === "vm"
+          ? (streamedSize ?? DEFAULT_VIRTUAL_MACHINE_SIZE)
+          : resolveDeviceMiniPlayerSourceSize(source.platform, screen),
   };
 }
 
 export function ThreadPreviewMiniPlayer({ threadRef, miniPlayer }: Props) {
   const { source } = miniPlayer;
+  if (source.kind === "vm")
+    return (
+      <VirtualMachineMiniPlayer
+        key={previewMiniPlayerSourceKey(source)}
+        threadRef={threadRef}
+        name={source.name}
+        miniPlayer={miniPlayer}
+      />
+    );
   return source.kind === "browser" ? (
     <BrowserMiniPlayer
       key={source.tabId}
@@ -406,6 +432,62 @@ function DeviceMiniPlayer({
             viewId={viewId}
             serveSimOnly={host?.kind === "simlock"}
           />
+        </div>
+      )}
+    </MiniPlayerShell>
+  );
+}
+
+function VirtualMachineMiniPlayer({
+  threadRef,
+  name,
+  miniPlayer,
+}: Props & { readonly name: string }) {
+  const viewportKey = streamedSourceKey(
+    threadRef,
+    previewMiniPlayerSourceKey({ kind: "vm", name }),
+  );
+  const sourceSize =
+    useStreamedSourceSize((state) => (state?.key === viewportKey ? state.viewport : null)) ??
+    DEFAULT_VIRTUAL_MACHINE_SIZE;
+
+  const openInPanel = () => {
+    usePreviewMiniPlayerStore.getState().close(threadRef);
+    useRightPanelStore.getState().openVirtualMachine(threadRef, name);
+  };
+
+  return (
+    <MiniPlayerShell
+      threadRef={threadRef}
+      miniPlayer={miniPlayer}
+      sourceSize={sourceSize}
+      label="Floating virtual machine preview"
+      onOpenInPanel={openInPanel}
+    >
+      {() => (
+        <div
+          className="pointer-events-auto absolute inset-0 overflow-hidden rounded-[inherit]"
+          style={{ zIndex: PREVIEW_MINI_PLAYER_WEBVIEW_Z_INDEX }}
+        >
+          <Suspense fallback={null}>
+            <VirtualMachineDeviceView
+              threadRef={threadRef}
+              placement={{ kind: "floating" }}
+              name={name}
+              visible
+              onScreen={(viewport) =>
+                useStreamedSourceSize.setState(
+                  (state) =>
+                    state?.key === viewportKey &&
+                    state.viewport.width === viewport.width &&
+                    state.viewport.height === viewport.height
+                      ? state
+                      : { key: viewportKey, viewport },
+                  true,
+                )
+              }
+            />
+          </Suspense>
         </div>
       )}
     </MiniPlayerShell>

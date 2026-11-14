@@ -143,6 +143,12 @@ export function shouldRenderPreviewMiniPlayer(
       renderedRightPanelSurface.resourceId === source.tabId
     );
   }
+  if (source.kind === "vm") {
+    return !(
+      renderedRightPanelSurface?.kind === "device" &&
+      renderedRightPanelSurface.virtualMachine === source.name
+    );
+  }
   return !(
     renderedRightPanelSurface?.kind === "device" &&
     renderedRightPanelSurface.target?.hostId === source.hostId &&

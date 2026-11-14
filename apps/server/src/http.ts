@@ -258,7 +258,7 @@ export const layerBrowserApiCors = Layer.unwrap(
     const config = yield* ServerConfig.ServerConfig;
     const devOrigin = config.devUrl?.origin;
     // Credentialed dev requests need explicit Vite/Electron origins; packaged desktop uses the default wildcard.
-    return HttpRouter.cors({
+    const cors = HttpMiddleware.cors({
       ...(devOrigin
         ? {
             allowedOrigins: [devOrigin, ...DESKTOP_RENDERER_ORIGINS, ...config.devAllowedOrigins],
@@ -269,6 +269,15 @@ export const layerBrowserApiCors = Layer.unwrap(
       allowedHeaders: browserApiCorsAllowedHeaders,
       maxAge: 600,
     });
+    // Guest viewers have opaque origins and their own VM-scoped credentials.
+    // Their proxy owns CORS without expanding the environment API policy.
+    return HttpRouter.middleware(
+      (app) =>
+        Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
+          request.url.startsWith("/api/vm-viewer/") ? app : cors(app),
+        ),
+      { global: true },
+    );
   }),
 );
 

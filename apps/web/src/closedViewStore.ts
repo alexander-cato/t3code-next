@@ -76,6 +76,7 @@ const isClosedViewEntry = (entry: unknown): entry is ClosedViewEntry => {
     case "device":
       return (
         (surface.title === undefined || typeof surface.title === "string") &&
+        (surface.virtualMachine === undefined || typeof surface.virtualMachine === "string") &&
         (surface.target === undefined ||
           (surface.target !== null &&
             typeof surface.target.hostId === "string" &&

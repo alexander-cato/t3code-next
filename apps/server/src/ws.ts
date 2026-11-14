@@ -188,6 +188,7 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import { terminalOutputStream, withOutputWindow } from "./terminal/OutputProtocol.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as DeviceService from "./device/DeviceService.ts";
+import * as VirtualMachineService from "./vm/VirtualMachineService.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
@@ -1449,6 +1450,7 @@ export const layerWsRpc = (
       const reviewGuides = yield* PullRequestReviewGuideService.PullRequestReviewGuideService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
       const deviceService = yield* DeviceService.DeviceService;
+      const virtualMachines = yield* VirtualMachineService.VirtualMachineService;
       const deviceHostContext =
         yield* Effect.context<Effect.Services<ReturnType<typeof remoteSshDeviceHosts>>>();
       const orchestrationEngine = yield* Orchestrator.OrchestratorV2;
@@ -3151,6 +3153,18 @@ export const layerWsRpc = (
         [WS_METHODS.previewReportProfiles]: (input) => reportProfiles(input),
         [WS_METHODS.previewReportStatus]: (input) => previewManager.reportStatus(input),
         [WS_METHODS.subscribePreviewEvents]: (_input) => previewManager.events,
+        [WS_METHODS.virtualMachineConfigure]: (input) => virtualMachines.configure(input.enabled),
+        [WS_METHODS.virtualMachineList]: () => virtualMachines.list,
+        [WS_METHODS.virtualMachineCreate]: (input) => virtualMachines.create(input),
+        [WS_METHODS.virtualMachineOpen]: (input) => virtualMachines.open(input),
+        [WS_METHODS.virtualMachineClose]: (input) => virtualMachines.close(input),
+        [WS_METHODS.virtualMachineStop]: (input) => virtualMachines.stop(input.name),
+        [WS_METHODS.virtualMachineDelete]: (input) => virtualMachines.remove(input.name),
+        [WS_METHODS.virtualMachineDismiss]: (input) => virtualMachines.dismiss(input.name),
+        [WS_METHODS.virtualMachineScreenshot]: (input) =>
+          virtualMachines.screenshot(input.threadId, input.name),
+        [WS_METHODS.subscribeVirtualMachines]: () =>
+          VirtualMachineService.stateStream(virtualMachines),
         [WS_METHODS.deviceConfigure]: (input) => deviceService.configure(input),
         [WS_METHODS.deviceTestHost]: (input) => deviceService.testHost(input),
         [WS_METHODS.deviceEasAccount]: (input) => deviceService.easAccount(input),

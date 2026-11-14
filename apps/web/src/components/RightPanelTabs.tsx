@@ -37,6 +37,7 @@ import { horizontalListSortingStrategy, SortableContext, useSortable } from "@dn
 import { CSS } from "@dnd-kit/utilities";
 import {
   Smartphone,
+  Monitor,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -593,7 +594,7 @@ function surfaceTitle(
     case "pull-requests":
       return "Pull requests";
     case "device":
-      return surface.title ?? surface.target?.name ?? "Device";
+      return surface.title ?? surface.virtualMachine ?? surface.target?.name ?? "Device";
     case "side-chat":
       return "Side chat";
     case "preview": {
@@ -687,7 +688,9 @@ function SurfaceIcon({
     case "side-chat":
       return <SideChatTabIcon environmentId={environmentId} threadId={surface.threadId} />;
     case "device":
-      return surface.target?.platform === "ios" ? (
+      return surface.virtualMachine !== undefined ? (
+        <Monitor className="size-3 shrink-0" />
+      ) : surface.target?.platform === "ios" ? (
         <AppleIcon className="size-3 shrink-0" />
       ) : surface.target?.platform === "android" ? (
         <AndroidIcon className="size-3 shrink-0" />
