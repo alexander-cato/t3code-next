@@ -1773,6 +1773,68 @@ it.live.skipIf(HostProcess.Platform.defaultValue() === "win32")(
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
+it.live.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "a job whose saved PID now names another process reads as lost and is never signalled",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const environment = yield* HostProcess.Environment;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-vm-job-" });
+      // Stands in for an unrelated process that took the job's PID after a guest reboot.
+      const stranger = NodeChildProcess.spawn("/bin/sleep", ["30"], { stdio: "ignore" });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => stranger.kill("SIGKILL")).pipe(Effect.ignore),
+      );
+      const sh = (script: string) =>
+        Effect.sync(() =>
+          NodeChildProcess.execFileSync("sh", ["-c", script], {
+            env: { ...environment, HOME: home },
+            encoding: "utf8",
+          }),
+        );
+      const directory = path.join(home, ".t3-vm-jobs", "job");
+      yield* fs.makeDirectory(directory, { recursive: true });
+      yield* fs.writeFileString(path.join(directory, "log"), "");
+      yield* fs.writeFileString(path.join(directory, "pid"), `${stranger.pid}\n`);
+      yield* fs.writeFileString(
+        path.join(directory, "id"),
+        "previous-boot Mon Jan  1 00:00:00 2024\n",
+      );
+      expect((yield* sh(VirtualMachineService.readJobScript("job", 0, false))).split("\n")[0]).toBe(
+        "T3JOB lost",
+      );
+      expect((yield* sh(VirtualMachineService.readJobScript("job", 0, true))).split("\n")[0]).toBe(
+        "T3JOB lost",
+      );
+      expect(() => process.kill(stranger.pid!, 0)).not.toThrow();
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.live.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "a running job reads as running while its saved identity matches",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const environment = yield* HostProcess.Environment;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-vm-job-" });
+      const sh = (script: string) =>
+        Effect.sync(() =>
+          NodeChildProcess.execFileSync("sh", ["-c", script], {
+            env: { ...environment, HOME: home },
+            encoding: "utf8",
+          }),
+        );
+      yield* Effect.addFinalizer(() =>
+        sh(VirtualMachineService.readJobScript("job", 0, true)).pipe(Effect.ignore),
+      );
+      yield* sh(VirtualMachineService.startJobScript("job", "exec /bin/sleep 30", undefined));
+      expect((yield* sh(VirtualMachineService.readJobScript("job", 0, false))).split("\n")[0]).toBe(
+        "T3JOB running",
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect("downloads a guest file into the workspace and refuses targets outside it", () =>
   provide(
     Effect.gen(function* () {
