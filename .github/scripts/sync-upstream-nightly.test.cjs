@@ -125,7 +125,7 @@ test("selects only published nightly releases", () => {
     "v1.2.3-nightly.20261114.1",
   );
 });
-test("mirrors exact upstream, builds a signed candidate, opens PR and explicitly dispatches both required checks", async () => {
+test("mirrors exact upstream, builds a signed candidate, opens PR and explicitly dispatches every required check", async () => {
   const { state, input } = fixture();
   const result = await syncUpstreamNightly(input);
   assert.equal(result.candidate, CANDIDATE);
@@ -136,7 +136,7 @@ test("mirrors exact upstream, builds a signed candidate, opens PR and explicitly
     .map(([, parameters]) => parameters);
   assert.deepEqual(
     dispatched.map((item) => item.workflow_id),
-    ["ci.yml", "agent-context-budget.yml"],
+    ["ci.yml", "agent-context-budget.yml", "security.yml"],
   );
   for (const dispatch of dispatched)
     assert.deepEqual(dispatch.inputs, {
@@ -146,7 +146,7 @@ test("mirrors exact upstream, builds a signed candidate, opens PR and explicitly
     });
   assert.equal(state.calls.filter(([kind]) => kind === "createRef").length, 1);
 });
-test("does no CI work for already incorporated releases or existing candidate runs; manual retry reruns both", async () => {
+test("does no CI work for already incorporated releases or existing candidate runs; manual retry reruns them all", async () => {
   const { state, input } = fixture();
   state.contained = true;
   assert.equal((await syncUpstreamNightly(input)).changed, false);
@@ -162,7 +162,7 @@ test("does no CI work for already incorporated releases or existing candidate ru
     false,
   );
   await syncUpstreamNightly({ ...input, retry: true });
-  assert.equal(state.calls.filter(([kind]) => kind === "dispatch").length, 2);
+  assert.equal(state.calls.filter(([kind]) => kind === "dispatch").length, 3);
 });
 test("does not propose or dispatch an unverified, conflicted, or raced candidate", async () => {
   for (const field of ["verified", "conflict", "stale", "mergeRace"]) {

@@ -185,7 +185,7 @@ async function syncUpstreamNightly({
   });
   const fields = {
     title: `chore(sync): update to ${nightly.tag_name}`,
-    body: `Bring the published [upstream nightly](https://github.com/pingdotgg/t3code/releases/tag/${nightly.tag_name}) into the fork.\n\nUpstream source: \`${sha}\`. The mirror remains exact upstream; this candidate merges it with main \`${main}\`.\n\nCI and Agent Context Budget are dispatched explicitly on \`${candidate}\`, because changes made with GITHUB_TOKEN do not trigger them automatically. Review conflicts, workflow changes, and the normal checks before merging.\n\nCreated by the repository's nightly sync workflow.`,
+    body: `Bring the published [upstream nightly](https://github.com/pingdotgg/t3code/releases/tag/${nightly.tag_name}) into the fork.\n\nUpstream source: \`${sha}\`. The mirror remains exact upstream; this candidate merges it with main \`${main}\`.\n\nCI, Agent Context Budget, and Security are dispatched explicitly on \`${candidate}\`, because changes made with GITHUB_TOKEN do not trigger them automatically. Review conflicts, workflow changes, and the normal checks before merging.\n\nCreated by the repository's nightly sync workflow.`,
   };
   const pull = open[0]
     ? (await github.rest.pulls.update({ ...REPOSITORY, pull_number: open[0].number, ...fields }))
@@ -194,7 +194,7 @@ async function syncUpstreamNightly({
         .data;
   if (pull.head.sha !== candidate || pull.base.sha !== main)
     throw new Error("PR source or base moved before CI dispatch.");
-  for (const workflow_id of ["ci.yml", "agent-context-budget.yml"]) {
+  for (const workflow_id of ["ci.yml", "agent-context-budget.yml", "security.yml"]) {
     const { data: runs } = await github.rest.actions.listWorkflowRuns({
       ...REPOSITORY,
       workflow_id,
