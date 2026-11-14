@@ -138,6 +138,7 @@ import {
   SavedBackendListRow,
 } from "./SavedEnvironmentRows";
 import { AddEnvironmentDialog } from "./AddEnvironmentDialog";
+import { InstallationDataSettings } from "./InstallationDataSettings";
 
 const DEFAULT_TAILSCALE_SERVE_PORT = 443;
 const EMPTY_ADVERTISED_ENDPOINTS: ReadonlyArray<AdvertisedEndpoint> = [];
@@ -330,11 +331,13 @@ function ConnectionsSettingsContent({
   >(null);
   const [isRevokingOtherDesktopClients, setIsRevokingOtherDesktopClients] = useState(false);
   const [addBackendDialogOpen, setAddBackendDialogOpen] = useState(false);
+  const [initialBackendHost, setInitialBackendHost] = useState("");
   const [routeTarget, setRouteTarget] = useState<EnvironmentPresentation | null>(null);
   const [savedBackendError, setSavedBackendError] = useState<string | null>(null);
   const handleAddBackendDialogOpenChange = (open: boolean) => {
     setAddBackendDialogOpen(open);
     if (open) {
+      setInitialBackendHost("");
       setRouteTarget(null);
     } else {
       setSavedBackendError(null);
@@ -1591,6 +1594,14 @@ function ConnectionsSettingsContent({
           <LocalEnvironmentSetting />
         </SettingsSection>
       ) : null}
+      <InstallationDataSettings
+        onConnect={(origin) => {
+          setInitialBackendHost(origin ?? "");
+          setRouteTarget(null);
+          setSavedBackendError(null);
+          setAddBackendDialogOpen(true);
+        }}
+      />
       <SettingsSection
         {...searchableSetting("remote-environments")}
         title="Environments"
@@ -1600,6 +1611,8 @@ function ConnectionsSettingsContent({
               <ServerUpdatesAction targets={savedServerUpdateTargets} variant="ghost-muted" />
             ) : null}
             <AddEnvironmentDialog
+              key={initialBackendHost}
+              initialHost={initialBackendHost}
               open={addBackendDialogOpen}
               routeTarget={routeTarget}
               error={savedBackendError}

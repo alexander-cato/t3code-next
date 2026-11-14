@@ -1,6 +1,7 @@
 import { fromLenientJson } from "@t3tools/shared/schemaJson";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import { desktopForkIdentity, isDesktopForkBuild } from "../forkIdentity.ts";
 
 import {
   DEFAULT_LINUX_PASSWORD_STORE,
@@ -31,7 +32,11 @@ export interface EarlyLinuxElectronOptions {
 }
 
 export const resolveLinuxDesktopEntryName = (isDevelopment: boolean): string =>
-  isDevelopment ? "com.t3tools.T3Code.Development.desktop" : "com.t3tools.T3Code.desktop";
+  isDesktopForkBuild
+    ? `${desktopForkIdentity.appId}.desktop`
+    : isDevelopment
+      ? "com.t3tools.T3Code.Development.desktop"
+      : "com.t3tools.T3Code.desktop";
 
 const trimNonEmpty = (value: string | undefined): string | null => {
   const trimmed = value?.trim();
