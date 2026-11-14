@@ -7,7 +7,7 @@ import type {
 } from "@t3tools/contracts";
 import { ArrowUpRight, CircleAlert, Play, Smartphone, X } from "lucide-react";
 import { useAtomMount } from "@effect/atom-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useEffectEvent, useState } from "react";
 
 import { usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
 import {
@@ -29,7 +29,7 @@ import {
   NO_DEVICE_PROBE_ATOM,
   useDeviceState,
 } from "~/state/device";
-import { formatEnvironmentQueryError } from "~/state/query";
+import { formatEnvironmentQueryError, useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { DeviceLoadingView } from "./DeviceLoadingView";
 import {
@@ -39,6 +39,8 @@ import {
   isAndroidDiscoveryUncertain,
 } from "./DeviceSetup";
 import { DeviceWorkspace } from "./DeviceWorkspace";
+import { VirtualMachineDeviceSection } from "../vm/VirtualMachineDeviceSection";
+import { virtualMachineEnvironment, useVirtualMachinesSupported } from "~/state/virtualMachines";
 import { PreviewPanelShell, type PreviewPanelMode } from "../preview/PreviewPanelShell";
 
 const platformLabel = (platform: DevicePlatform) =>
@@ -72,6 +74,40 @@ export function DevicePanel(props: {
   const pendingDeviceKey = pendingDevice ? deviceKey(pendingDevice) : null;
 
   const hostDisabled = state.hostStatus === "disabled";
+  const virtualMachinesSupported = useVirtualMachinesSupported(environmentId);
+  const virtualMachines = useEnvironmentQuery(
+    virtualMachinesSupported ? virtualMachineEnvironment.state({ environmentId, input: {} }) : null,
+  ).data;
+  const listVirtualMachines = useAtomCommand(virtualMachineEnvironment.list, {
+    reportFailure: false,
+  });
+  const [vmDiscovery, setVmDiscovery] = useState<{
+    readonly environmentId: typeof environmentId;
+    readonly error: string | null;
+  } | null>(null);
+  const vmDiscoveryError = vmDiscovery?.environmentId === environmentId ? vmDiscovery.error : null;
+  const refreshVirtualMachines = async (targetEnvironmentId = environmentId) => {
+    if (!virtualMachinesSupported) return;
+    const started = { environmentId: targetEnvironmentId, error: null };
+    setVmDiscovery(started);
+    const result = await listVirtualMachines({ environmentId: targetEnvironmentId, input: {} });
+    setVmDiscovery((current) =>
+      current === started
+        ? {
+            ...started,
+            error: result._tag === "Failure" ? formatEnvironmentQueryError(result.cause) : null,
+          }
+        : current,
+    );
+  };
+  const discoverVirtualMachines = useEffectEvent(refreshVirtualMachines);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- discovers VM support and inventory for both onboarding and the device list
+  useEffect(() => {
+    if (props.visible && virtualMachinesSupported) {
+      // oxlint-disable-next-line react/set-state-in-effect -- Discovery synchronizes the external VM inventory and its failure feedback.
+      void discoverVirtualMachines(environmentId);
+    }
+  }, [environmentId, props.visible, virtualMachinesSupported]);
 
   useAtomMount(
     props.visible && loaded && !hostDisabled
@@ -200,7 +236,8 @@ export function DevicePanel(props: {
       .map((platform) => ({ ...platform, hostId: host.id, hostLabel: host.label })),
   );
 
-  if (loaded && (!state.onboardingCompleted || hostDisabled)) {
+  // macOS VMs need no device hub, so turning the hub off later keeps the list for them.
+  if (loaded && (!state.onboardingCompleted || (hostDisabled && !virtualMachines?.enabled))) {
     return (
       <Dialog
         open={props.visible}
@@ -306,7 +343,9 @@ export function DevicePanel(props: {
                     >
                       {state.hostStatus === "failed"
                         ? (state.hostStatusDetail ?? "The device hub failed to start.")
-                        : "No simulators or emulators were found on this environment."}
+                        : hostDisabled
+                          ? "Simulators and emulators are off. Turn on the device hub in Settings > Devices."
+                          : "No simulators or emulators were found on this environment."}
                     </p>
                   </>
                 ) : null}
@@ -367,12 +406,19 @@ export function DevicePanel(props: {
                     then refresh.
                   </p>
                 ) : null}
+                <VirtualMachineDeviceSection
+                  threadRef={props.threadRef}
+                  discoveryError={vmDiscoveryError}
+                />
                 {loaded && !hostBusy ? (
                   <Button
                     className={grouped.length > 0 ? "self-start" : "self-center"}
                     variant="outline"
                     size="sm"
-                    onClick={() => void list({ environmentId, input: {} })}
+                    onClick={() => {
+                      void list({ environmentId, input: {} });
+                      void refreshVirtualMachines();
+                    }}
                   >
                     Refresh devices
                   </Button>

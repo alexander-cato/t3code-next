@@ -1,7 +1,11 @@
-import { ThreadId, type DeviceServiceState } from "@t3tools/contracts";
+import { ThreadId, type DeviceServiceState, type VirtualMachineState } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { selectedThreadDevicePreview, threadDevicePreviews } from "./threadDevicePreviews";
+import {
+  selectedThreadDevicePreview,
+  threadDevicePreviews,
+  virtualMachinePreviewKey,
+} from "./threadDevicePreviews";
 
 const threadId = ThreadId.make("thread");
 const state: DeviceServiceState = {
@@ -91,4 +95,76 @@ describe("thread device previews", () => {
     expect(selectedThreadDevicePreview(afterClose, selectedKey)?.name).toBe("Pixel 9");
     expect(selectedThreadDevicePreview([], selectedKey)).toBeNull();
   });
+
+  it("lists the thread's macOS VMs after its devices, with one the user asked to open", () => {
+    const virtualMachines: VirtualMachineState = {
+      enabled: true,
+      available: true,
+      unavailableReason: null,
+      machines: [],
+      sessions: [
+        { name: "mac-one", threadId },
+        { name: "other-thread-mac", threadId: ThreadId.make("another-thread") },
+      ],
+      operations: [],
+    };
+    const previews = threadDevicePreviews(state, threadId, virtualMachines, {
+      name: "mac-two",
+      closedSessionId: null,
+    });
+    expect(previews.map((preview) => [preview.kind, preview.name])).toEqual([
+      ["device", "Pixel 9"],
+      ["device", "Pixel 8"],
+      ["vm", "mac-one"],
+      ["vm", "mac-two"],
+    ]);
+    expect(previews.at(-1)?.key).toBe(virtualMachinePreviewKey("mac-two"));
+    expect(
+      threadDevicePreviews(
+        state,
+        threadId,
+        { ...virtualMachines, enabled: false },
+        { name: "mac-two", closedSessionId: null },
+      ),
+    ).toHaveLength(2);
+    expect(
+      threadDevicePreviews(
+        null,
+        threadId,
+        {
+          ...virtualMachines,
+          machines: [{ name: "mac-two", status: "stopped" }],
+          closedSessions: [{ name: "mac-two", threadId, id: "previous-close" }],
+        },
+        { name: "mac-two", closedSessionId: "previous-close" },
+      ).map((preview) => preview.name),
+    ).toEqual(["mac-one", "mac-two"]);
+    expect(
+      threadDevicePreviews(null, threadId, {
+        ...virtualMachines,
+        machines: [{ name: "mac-one", status: "stopped" }],
+      }),
+    ).toEqual([]);
+  });
+
+  it.each(["closed", "suspended"] as const)(
+    "does not retain a requested VM after it is %s",
+    (change) => {
+      const virtualMachines: VirtualMachineState = {
+        enabled: true,
+        available: true,
+        unavailableReason: null,
+        machines: [{ name: "mac-one", status: change === "suspended" ? "stopped" : "ready" }],
+        sessions: [],
+        closedSessions: [{ name: "mac-one", threadId, id: "new-close" }],
+        operations: [],
+      };
+      expect(
+        threadDevicePreviews(null, threadId, virtualMachines, {
+          name: "mac-one",
+          closedSessionId: null,
+        }),
+      ).toEqual([]);
+    },
+  );
 });

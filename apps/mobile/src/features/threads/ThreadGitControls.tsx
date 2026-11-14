@@ -1,3 +1,4 @@
+import type { ThreadDevicesMenu } from "../devices/useThreadDevicesMenu";
 import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
 import type { AppBarMenu } from "../../components/ui/AppBar.types";
@@ -92,6 +93,7 @@ export type ThreadGitMenuProps = {
 };
 
 export type ThreadGitControlsProps = ThreadGitMenuProps & {
+  readonly devicesMenu?: ThreadDevicesMenu | null;
   readonly canOpenTerminal: boolean;
   readonly canOperateTerminal: boolean;
   readonly canOpenFiles: boolean;

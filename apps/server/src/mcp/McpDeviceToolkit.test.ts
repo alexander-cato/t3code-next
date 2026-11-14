@@ -7,13 +7,16 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { McpSchema, McpServer } from "effect/ai";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as DeviceService from "../device/DeviceService.ts";
+import * as VirtualMachineService from "../vm/VirtualMachineService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -146,11 +149,28 @@ const layerDeviceServiceMock = Layer.mock(DeviceService.DeviceService)({
     Effect.succeedSome(`/state/device/targets/thread-device/${targetArgs.join("_")}/agent-device`),
 });
 
+// Device tools also reach VMs; these tests run as a host that cannot run any.
+const layerNoVirtualMachines = Layer.mergeAll(
+  Layer.succeed(HostProcess.Platform, "linux"),
+  ServerSettings.layerTest({ enableAgentDeviceAccess: true }),
+  Layer.mock(VirtualMachineService.VirtualMachineService)({
+    state: Effect.succeed({
+      enabled: false,
+      available: false,
+      unavailableReason: null,
+      machines: [],
+      sessions: [],
+      operations: [],
+    }),
+  }),
+);
+
 const layerTest = McpHttpServer.layerDeviceToolkit.pipe(
   Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
   Layer.provideMerge(layerDeviceServiceMock),
   Layer.provide(layerProjectsMock),
+  Layer.provide(layerNoVirtualMachines),
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-device-toolkit-test-" })),
   Layer.provide(NodeServices.layer),
 );
@@ -276,6 +296,7 @@ it.effect("rejects unavailable agent access before booting or opening a device",
         Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
         Layer.provide(layerUnavailable),
         Layer.provide(layerProjectsMock),
+        Layer.provide(layerNoVirtualMachines),
         Layer.provide(
           ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-device-toolkit-test-" }),
         ),
@@ -328,6 +349,7 @@ it.effect("device_open reports a failed host's setup error instead of no devices
         Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
         Layer.provide(layerFailed),
         Layer.provide(layerProjectsMock),
+        Layer.provide(layerNoVirtualMachines),
         Layer.provide(
           ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-device-toolkit-test-" }),
         ),
@@ -468,6 +490,7 @@ describe("device targeting across hosts", () => {
           Layer.provideMerge(McpToolAccessTestkit.liveThreadsLayer),
           Layer.provide(layerDevices),
           Layer.provide(layerProjectsMock),
+          Layer.provide(layerNoVirtualMachines),
           Layer.provide(
             ServerConfig.layerTest(process.cwd(), { prefix: "t3-mcp-device-toolkit-test-" }),
           ),

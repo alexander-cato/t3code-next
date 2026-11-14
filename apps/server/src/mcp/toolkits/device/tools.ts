@@ -7,6 +7,7 @@ import {
   DeviceToolOpenResult,
   DeviceToolScreenshotResult,
   DeviceToolTargetInput,
+  VirtualMachineError,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import * as FileSystem from "effect/FileSystem";
@@ -16,6 +17,8 @@ import { Tool, Toolkit } from "effect/ai";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as DeviceService from "../../../device/DeviceService.ts";
+import * as VirtualMachineService from "../../../vm/VirtualMachineService.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 
@@ -23,13 +26,19 @@ const dependencies = [
   McpInvocationContext.McpInvocationContext,
   ThreadManagementService.ThreadManagementService,
   DeviceService.DeviceService,
+  VirtualMachineService.VirtualMachineService,
+  ServerSettings.ServerSettingsService,
 ];
 
-const DeviceToolFailure = Schema.Union([DeviceToolError, OrchestratorMcpFailure]);
+const DeviceToolFailure = Schema.Union([
+  DeviceToolError,
+  VirtualMachineError,
+  OrchestratorMcpFailure,
+]);
 
 const DeviceListTool = Tool.make("device_list", {
   description:
-    "List iOS Simulators and Android Emulators on every device host, what each host can run, and what is open in this thread's Device panel. Call before `device_open` when you do not know a device id.",
+    "List iOS Simulators, Android Emulators, and macOS VMs on every device host, what each host can run, and what is open in this thread's Device panel. Call before `device_open` when you do not know a device id or VM name.",
   // An empty struct serializes as `anyOf [object, array]`, which some
   // providers reject and then drop every tool on the server with it.
   parameters: Schema.Struct({
@@ -49,7 +58,7 @@ const DeviceListTool = Tool.make("device_list", {
 
 const DeviceOpenTool = Tool.make("device_open", {
   description:
-    "Open a simulator or emulator for this thread. Pass `deviceId` and `hostId` from `device_list`. Boots it if needed and shows it in the user's Device panel. Returns the `agent-device` CLI call pinned to that device. Drive the device with that CLI.",
+    "Open a simulator, emulator, or macOS VM for this thread. Pass `deviceId` and `hostId`, or `virtualMachine`, from `device_list`. Boots it if needed and shows it in the user's Device panel. Returns how to drive it: the `agent-device` CLI call pinned to a device, or the vm_* tools for a VM.",
   parameters: DeviceToolOpenInput,
   success: DeviceToolOpenResult,
   failure: DeviceToolFailure,
@@ -70,7 +79,7 @@ const DeviceOpenTool = Tool.make("device_open", {
 
 export const DeviceScreenshotTool = Tool.make("device_screenshot", {
   description:
-    "Get a PNG of an open device's screen. For taps and text, use the `agent-device` CLI.",
+    "Get a PNG of an open device's or VM's screen. For taps and text, use the `agent-device` CLI or `vm_control`.",
   parameters: DeviceToolTargetInput,
   success: DeviceToolScreenshotResult,
   failure: DeviceToolFailure,
@@ -84,7 +93,7 @@ export const DeviceScreenshotTool = Tool.make("device_screenshot", {
 
 const DeviceCloseTool = Tool.make("device_close", {
   description:
-    "Remove a device from this thread's Device panel. `shutdown=true` also turns it off.",
+    "Remove a device or VM from this thread's Device panel. `shutdown=true` also turns it off.",
   parameters: DeviceToolCloseInput,
   success: Schema.Record(Schema.String, Schema.Never),
   failure: DeviceToolFailure,

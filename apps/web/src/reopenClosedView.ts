@@ -4,6 +4,7 @@ import type { OpenPreviewMutation } from "./browser/openFileInPreview";
 import type { ClosedView, ClosedViewEntry } from "./closedViewStore";
 import type { PullRequestListPreferences } from "./components/pullRequest/pullRequestListPreferences";
 import { openPreviewSession } from "./components/preview/openPreviewSession";
+import { requestVirtualMachineOpen } from "./components/vm/virtualMachinePanelSession";
 import {
   rightPanelHostRef,
   type RightPanelSurface,
@@ -146,7 +147,10 @@ export async function reopenClosedView(
       break;
     }
     case "device":
-      if (surface.target) {
+      if (surface.virtualMachine) {
+        requestVirtualMachineOpen(ref, surface.virtualMachine);
+        panels.openVirtualMachine(ref, surface.virtualMachine);
+      } else if (surface.target) {
         panels.openDevice(ref, surface.target);
         if (surface.title) panels.renameDevice(ref, surface.id, surface.title);
       } else panels.open(ref, "device");

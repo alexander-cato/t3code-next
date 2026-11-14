@@ -154,3 +154,30 @@ the same canvas sink, so the panel and the mobile WebView keep one surface.
 Android asks serve-emu's `/api` before opening its video socket and streams
 WebRTC when it is advertised (EAS Simulator), keeping a separate `video=0`
 socket for input so input can reconnect without restarting video.
+
+## macOS VMs share the panel and the tools, not the hub
+
+macOS VMs appear in the Device panel and answer to `device_list`, `device_open`,
+`device_screenshot`, and `device_close`, but they stay out of `DeviceService` and
+its hosts. A VM streams Cua's own web viewer through
+[`VirtualMachineViewerProxy`](../../apps/server/src/vm/VirtualMachineViewerProxy.ts)
+and is driven through Cua's guest MCP server, so nothing from the hub, the
+stream protocols above, or agent-device applies. The device tools route a
+`virtualMachine` target to
+[`VirtualMachineService`](../../apps/server/src/vm/VirtualMachineService.ts), and
+only guest input, guest commands, uploads, and VM creation and deletion keep
+`vm_*` tools.
+
+VMs need no device hub, so the panel lists them while the hub is off once VMs
+are turned on. Agents still reach them only with **Agents can use devices**: the
+`vm_*` tools check the same `device` capability as the device tools. A VM tab is
+an ordinary device tab whose id is `device:@vm:<name>`; host ids cannot contain
+`@`, so it never collides with a device's tab.
+
+VM tabs stay mounted while hidden
+([`VirtualMachineTabs`](../../apps/web/src/components/vm/VirtualMachineTabs.tsx)):
+remounting reopens the VM and restarts Cua's stream, which takes seconds where a
+device stream takes a frame. Moving an iframe in the DOM also reloads it, so the
+tabs render in id order, not tab order. On web, T3 draws the VM's controls rail
+and the bridge hides Cua's toolbar; fullscreen and file pickers inside the frame
+need the frame's own user activation, so they cannot move to the rail.

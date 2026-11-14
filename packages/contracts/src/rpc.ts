@@ -312,6 +312,15 @@ import {
   DeviceShutdownInput,
 } from "./device.ts";
 import {
+  VirtualMachineError,
+  VirtualMachineCreateInput,
+  VirtualMachineOpenInput,
+  VirtualMachineScreenshot,
+  VirtualMachineState,
+  VirtualMachineTarget,
+  VirtualMachineViewer,
+} from "./virtualMachine.ts";
+import {
   ServerConfigStreamEvent,
   DesktopUpdateCommitInput,
   OtlpEndpointCheckInput,
@@ -492,6 +501,16 @@ export const WS_METHODS = {
   previewReportStatus: "preview.reportStatus",
   previewStopLocalServer: "preview.stopLocalServer",
 
+  virtualMachineConfigure: "vm.configure",
+  virtualMachineList: "vm.list",
+  virtualMachineCreate: "vm.create",
+  virtualMachineOpen: "vm.open",
+  virtualMachineClose: "vm.close",
+  virtualMachineStop: "vm.stop",
+  virtualMachineDelete: "vm.delete",
+  virtualMachineDismiss: "vm.dismiss",
+  virtualMachineScreenshot: "vm.screenshot",
+  subscribeVirtualMachines: "subscribeVirtualMachines",
   deviceConfigure: "device.configure",
   deviceList: "device.list",
   deviceTestHost: "device.testHost",
@@ -1704,6 +1723,54 @@ const WsSubscribeDiscoveredLocalServersRpc = Rpc.make(WS_METHODS.subscribeDiscov
   stream: true,
 });
 
+const vmRpcError = Schema.Union([VirtualMachineError, EnvironmentAuthorizationError]);
+const WsVmConfigureRpc = Rpc.make(WS_METHODS.virtualMachineConfigure, {
+  payload: Schema.Struct({ enabled: Schema.Boolean }),
+  success: VirtualMachineState,
+  error: vmRpcError,
+});
+const WsVmListRpc = Rpc.make(WS_METHODS.virtualMachineList, {
+  payload: Schema.Struct({}),
+  success: VirtualMachineState,
+  error: vmRpcError,
+});
+const WsVmCreateRpc = Rpc.make(WS_METHODS.virtualMachineCreate, {
+  payload: VirtualMachineCreateInput,
+  error: vmRpcError,
+});
+const WsVmOpenRpc = Rpc.make(WS_METHODS.virtualMachineOpen, {
+  payload: VirtualMachineOpenInput,
+  success: VirtualMachineViewer,
+  error: vmRpcError,
+});
+const WsVmCloseRpc = Rpc.make(WS_METHODS.virtualMachineClose, {
+  payload: VirtualMachineOpenInput,
+  error: vmRpcError,
+});
+const WsVmStopRpc = Rpc.make(WS_METHODS.virtualMachineStop, {
+  payload: VirtualMachineTarget,
+  error: vmRpcError,
+});
+const WsVmDismissRpc = Rpc.make(WS_METHODS.virtualMachineDismiss, {
+  payload: VirtualMachineTarget,
+  error: vmRpcError,
+});
+const WsVmScreenshotRpc = Rpc.make(WS_METHODS.virtualMachineScreenshot, {
+  payload: VirtualMachineOpenInput,
+  success: VirtualMachineScreenshot,
+  error: vmRpcError,
+});
+const WsVmDeleteRpc = Rpc.make(WS_METHODS.virtualMachineDelete, {
+  payload: VirtualMachineTarget,
+  error: vmRpcError,
+});
+const WsSubscribeVirtualMachinesRpc = Rpc.make(WS_METHODS.subscribeVirtualMachines, {
+  payload: Schema.Struct({}),
+  success: VirtualMachineState,
+  error: EnvironmentAuthorizationError,
+  stream: true,
+});
+
 const WsDeviceTestHostRpc = Rpc.make(WS_METHODS.deviceTestHost, {
   payload: SshDeviceHostConfig,
   success: DeviceHostSummary,
@@ -2245,6 +2312,16 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribePreviewEventsRpc,
   WsPreviewStopLocalServerRpc,
   WsSubscribeDiscoveredLocalServersRpc,
+  WsVmConfigureRpc,
+  WsVmListRpc,
+  WsVmCreateRpc,
+  WsVmOpenRpc,
+  WsVmCloseRpc,
+  WsVmStopRpc,
+  WsVmDeleteRpc,
+  WsVmDismissRpc,
+  WsVmScreenshotRpc,
+  WsSubscribeVirtualMachinesRpc,
   WsDeviceConfigureRpc,
   WsDeviceListRpc,
   WsDeviceTestHostRpc,

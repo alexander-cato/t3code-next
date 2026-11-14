@@ -592,3 +592,34 @@ it.effect("rejects protected unary and streamed RPCs outside a guarded command",
     expect(writes).toBe(0);
   }),
 );
+
+it.effect.each([
+  { method: WS_METHODS.virtualMachineConfigure, scope: AuthSettingsWriteScope },
+  { method: WS_METHODS.virtualMachineCreate, scope: AuthOrchestrationOperateScope },
+  { method: WS_METHODS.virtualMachineOpen, scope: AuthOrchestrationOperateScope },
+  { method: WS_METHODS.virtualMachineClose, scope: AuthOrchestrationOperateScope },
+  { method: WS_METHODS.virtualMachineStop, scope: AuthOrchestrationOperateScope },
+  { method: WS_METHODS.virtualMachineDelete, scope: AuthOrchestrationOperateScope },
+  { method: WS_METHODS.virtualMachineDismiss, scope: AuthOrchestrationOperateScope },
+  { method: WS_METHODS.virtualMachineScreenshot, scope: AuthOrchestrationOperateScope },
+] as const)("guards $method against the destination environment's grant", ({ method, scope }) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const registry = yield* setup;
+      const command = createCommandPermissions(runtime, method);
+      registry.set(sessions(env), AsyncResult.success(grant(false)));
+      expect(registry.get(command.permissionAtom(env))).toBe(false);
+      expect((yield* command.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
+        "EnvironmentAuthorizationError",
+      );
+      registry.set(
+        sessions(env),
+        AsyncResult.success({ ...grant(false), scopes: [scope], permissions: [scope] }),
+      );
+      expect(registry.get(command.permissionAtom(env))).toBe(true);
+      yield* command.authorize(registry, env);
+      registry.set(sessions(other), AsyncResult.success(grant(false)));
+      expect(registry.get(command.permissionAtom(other))).toBe(false);
+    }),
+  ),
+);

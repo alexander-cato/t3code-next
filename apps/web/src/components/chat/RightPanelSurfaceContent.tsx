@@ -32,6 +32,11 @@ const DiffPanel = lazy(() => import("../DiffPanel"));
 const DevicePanel = lazy(() =>
   import("../device/DevicePanel").then((module) => ({ default: module.DevicePanel })),
 );
+const VirtualMachineTabs = lazy(() =>
+  import("../vm/VirtualMachineTabs").then((module) => ({
+    default: module.VirtualMachineTabs,
+  })),
+);
 const FilePreviewPanel = lazy(() => import("../files/FilePreviewPanel"));
 
 type RightPanelTerminalProps = Omit<
@@ -59,8 +64,9 @@ interface RightPanelFileProps {
   readonly onPendingChange: (relativePath: string, pending: boolean) => void;
 }
 
-export function RightPanelSurfaceContent(props: {
+interface RightPanelSurfaceContentProps {
   readonly surface: RightPanelSurface | null;
+  readonly surfaces: ReadonlyArray<RightPanelSurface>;
   readonly activeSurfaceId: string | null;
   readonly threadRef: ScopedThreadRef;
   readonly environmentId: EnvironmentId;
@@ -79,7 +85,30 @@ export function RightPanelSurfaceContent(props: {
   readonly pullRequest: RightPanelPullRequestProps;
   readonly files: RightPanelFileProps;
   readonly sideChatParentPanel: SideChatParentPanel;
-}) {
+}
+
+export function RightPanelSurfaceContent(props: RightPanelSurfaceContentProps) {
+  const hasVirtualMachineTabs = props.surfaces.some(
+    (surface) => surface.kind === "device" && surface.virtualMachine !== undefined,
+  );
+  return (
+    <>
+      {hasVirtualMachineTabs && (
+        <Suspense fallback={null}>
+          <VirtualMachineTabs
+            threadRef={props.threadRef}
+            surfaces={props.surfaces}
+            activeSurfaceId={props.surface?.id ?? null}
+            visible={props.visible}
+          />
+        </Suspense>
+      )}
+      <ActiveSurfaceContent {...props} />
+    </>
+  );
+}
+
+function ActiveSurfaceContent(props: RightPanelSurfaceContentProps) {
   const { surface, threadRef, visible, onCloseSurface } = props;
   if (surface === null) return null;
   switch (surface.kind) {
@@ -185,6 +214,8 @@ export function RightPanelSurfaceContent(props: {
         />
       );
     case "device":
+      // VirtualMachineTabs renders VM tabs.
+      if (surface.virtualMachine !== undefined) return null;
       return (
         <Suspense fallback={null}>
           <DevicePanel

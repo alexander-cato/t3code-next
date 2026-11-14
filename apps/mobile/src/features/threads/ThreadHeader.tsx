@@ -1,3 +1,4 @@
+import { threadDevicesAppBarMenu } from "../devices/useThreadDevicesMenu";
 import { AppBar } from "../../components/ui/AppBar";
 import type { AppBarAction, AppBarMenu } from "../../components/ui/AppBar.types";
 import {
@@ -40,7 +41,12 @@ export function ThreadHeader(props: {
         },
       ]
     : [];
-  const menus = [gitMenu, terminalMenu].filter((menu): menu is AppBarMenu => menu !== null);
+  const devicesMenu = props.gitControls.devicesMenu
+    ? threadDevicesAppBarMenu(props.gitControls.devicesMenu)
+    : null;
+  const menus = [gitMenu, terminalMenu, devicesMenu].filter(
+    (menu): menu is AppBarMenu => menu !== null,
+  );
 
   return (
     <AppBar

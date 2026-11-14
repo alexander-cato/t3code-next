@@ -1,4 +1,4 @@
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { type EnvironmentId, RunId, ThreadId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 
@@ -1277,4 +1277,75 @@ describe("rightPanelStore", () => {
     expect(surfaceIds()).toEqual(["browser:tab-a", "terminal:term-1", "diff", "browser:tab-b"]);
     expect(store.getUserActionRevision(refA)).toBe(revision);
   });
+});
+
+it("opens a VM in the device list's tab, keeps one tab per VM, and returns it to the list", () => {
+  const store = useRightPanelStore.getState();
+  store.open(refA, "device");
+  store.openVirtualMachine(refA, "mac-one");
+  const vmTab = { id: "device:@vm:mac-one", kind: "device", virtualMachine: "mac-one" };
+  expect(
+    selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+  ).toEqual([vmTab]);
+  store.openVirtualMachine(refA, "mac-two");
+  store.openVirtualMachine(refA, "mac-one");
+  expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual(
+    vmTab,
+  );
+  store.showDevicePicker(refA, vmTab.id);
+  expect(
+    selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+  ).toEqual([
+    { id: "device", kind: "device" },
+    { id: "device:@vm:mac-two", kind: "device", virtualMachine: "mac-two" },
+  ]);
+});
+
+it("returns an environment's VM tabs to the device list without duplicating it", () => {
+  const store = useRightPanelStore.getState();
+  const otherEnvironment = scopeThreadRef("environment-other" as EnvironmentId, refA.threadId);
+  for (const ref of [refA, refB, otherEnvironment]) store.openVirtualMachine(ref, "mac-one");
+  store.openVirtualMachine(refA, "mac-two");
+  store.open(refA, "device");
+  store.releaseVirtualMachineTabs(refA.environmentId, "mac-one");
+  const surfaces = (ref: typeof refA) =>
+    selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, ref).surfaces;
+  expect(surfaces(refA)).toEqual([
+    { id: "device:@vm:mac-two", kind: "device", virtualMachine: "mac-two" },
+    { id: "device", kind: "device" },
+  ]);
+  expect(surfaces(refB)).toEqual([{ id: "device", kind: "device" }]);
+  expect(surfaces(otherEnvironment)).toEqual([
+    { id: "device:@vm:mac-one", kind: "device", virtualMachine: "mac-one" },
+  ]);
+});
+
+it("drops persisted tabs from the separate VM panel", () => {
+  const migrated = migratePersistedRightPanelState({
+    byThreadKey: {
+      [scopedThreadKey(refA)]: {
+        isOpen: true,
+        activeSurfaceId: "vm",
+        surfaces: [{ id: "vm", kind: "vm", selectedName: "legacy-mac" }],
+      },
+    },
+  });
+  expect(migrated.byThreadKey[scopedThreadKey(refA)]?.surfaces).toEqual([]);
+});
+
+it("reopens a closed VM tab", async () => {
+  const store = useRightPanelStore.getState();
+  store.openVirtualMachine(refA, "mac-one");
+  store.closeSurface(refA, "device:@vm:mac-one");
+  expect(
+    await reopenClosedView(useClosedViewStore.getState().entries[0]!, {
+      workspaceAvailable: true,
+      openPreview: () => {
+        throw new Error("A VM tab must not open a browser");
+      },
+    }),
+  ).toBe(true);
+  expect(
+    selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA),
+  ).toMatchObject({ kind: "device", virtualMachine: "mac-one" });
 });
