@@ -4,14 +4,29 @@ name: Agent Context Budget
 # keeps that file equal to the measured context, so the context cannot grow by editing the file.
 # To accept growth on purpose, a maintainer adds the agent-context-increase label.
 on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact nightly candidate commit to check
+        type: string
+        required: true
+      base_sha:
+        description: Exact main commit the nightly PR is based on
+        type: string
+        required: true
+      pull_request:
+        description: Nightly sync PR number
+        type: string
+        required: true
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
-  group: agent-context-budget-${{ github.event.pull_request.number }}
+  group: agent-context-budget-${{ github.event.pull_request.number || inputs.pull_request }}
   cancel-in-progress: true
 
 jobs:
@@ -21,14 +36,31 @@ jobs:
     timeout-minutes: 5
     env:
       BUDGET: apps/server/src/provider/agentContextBudget.json
-      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      BASE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.base_sha || github.event.pull_request.base.sha }}
       ALLOW_INCREASE: ${{ contains(github.event.pull_request.labels.*.name, 'agent-context-increase') }}
     steps:
       - name: Checkout
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          sparse-checkout: apps/server/src/provider/agentContextBudget.json
+          sparse-checkout: |
+            /apps/server/src/provider/agentContextBudget.json
+            /.github/scripts/validate-nightly-dispatch.cjs
           sparse-checkout-cone-mode: false
+
+      - name: Validate explicit nightly CI dispatch
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          BASE_SHA: ${{ inputs.base_sha }}
+          PULL_NUMBER: ${{ inputs.pull_request }}
+        with:
+          script: |
+            const { validateNightlyDispatch } = require('./.github/scripts/validate-nightly-dispatch.cjs');
+            const result = await validateNightlyDispatch({ github, context,
+              expectedSha: process.env.EXPECTED_SHA, baseSha: process.env.BASE_SHA,
+              pullNumber: process.env.PULL_NUMBER });
+            core.exportVariable('ALLOW_INCREASE', String(result.allowIncrease));
 
       - name: Compare with PR base
         run: |
