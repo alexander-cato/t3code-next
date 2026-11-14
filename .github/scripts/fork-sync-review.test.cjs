@@ -1,6 +1,6 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
-const { completedReviews, mergeReviewedNightly } = require("./fork-sync-review.cjs");
+const { completedCodeReview, mergeReviewedNightly } = require("./fork-sync-review.cjs");
 const HEAD = "a".repeat(40),
   BASE = "b".repeat(40);
 function summary(state, extra = {}) {
@@ -14,42 +14,48 @@ function summary(state, extra = {}) {
 function reviews() {
   return {
     code_review: { commit_sha: HEAD, status: "completed", has_unresolved_findings: false },
-    security_review: { commit_sha: HEAD, status: "completed", has_unresolved_findings: false },
+    // Codex reports a completed security review with null findings; the merger must not need it.
+    security_review: {
+      commit_sha: BASE,
+      status: "completed",
+      has_any_findings: null,
+      has_unresolved_findings: null,
+    },
   };
 }
-test("requires both current-head review states, trusted numeric bot identity, and explicit no-unresolved findings", () => {
-  assert.equal(completedReviews([summary(reviews())], HEAD), true);
+test("requires a current-head code review, trusted numeric bot identity, and explicit no-unresolved findings", () => {
+  assert.equal(completedCodeReview([summary(reviews())], HEAD), true);
   for (const mutate of [
     (value) => (value.code_review.status = "running"),
-    (value) => (value.security_review.commit_sha = BASE),
-    (value) => (value.security_review.has_unresolved_findings = null),
+    (value) => (value.code_review.commit_sha = BASE),
+    (value) => (value.code_review.has_unresolved_findings = null),
     (value) => (value.code_review.has_unresolved_findings = true),
-    (value) => delete value.security_review,
+    (value) => delete value.code_review,
   ]) {
     const state = reviews();
     mutate(state);
-    assert.equal(completedReviews([summary(state)], HEAD), false);
+    assert.equal(completedCodeReview([summary(state)], HEAD), false);
   }
   assert.equal(
-    completedReviews(
+    completedCodeReview(
       [summary(reviews(), { user: { id: 1, login: "chatgpt-codex-connector[bot]", type: "Bot" } })],
       HEAD,
     ),
     false,
   );
-  assert.equal(completedReviews([summary(reviews()), summary({}, { id: 2 })], HEAD), false);
+  assert.equal(completedCodeReview([summary(reviews()), summary({}, { id: 2 })], HEAD), false);
   for (const body of [
     "<!-- codex-review-state:v1 invalid -->",
     "x".repeat(100001),
     summary(reviews()).body.repeat(2),
   ]) {
-    assert.equal(completedReviews([summary(reviews(), { body })], HEAD), false);
+    assert.equal(completedCodeReview([summary(reviews(), { body })], HEAD), false);
   }
 });
 function fixture() {
   const state = {
     review: reviews(),
-    checks: ["Check", "Agent context budget"].map((name) => ({
+    checks: ["Check", "Agent context budget", "Security check"].map((name) => ({
       name,
       head_sha: HEAD,
       app: { id: 15368 },
@@ -139,7 +145,9 @@ test("merges only a fully reviewed candidate, pinning the head and using the App
 });
 test("leaves the PR open for review, check, discussion, or main races without relying on older success", async () => {
   for (const alter of [
-    (state) => (state.review.security_review.status = "running"),
+    (state) => (state.review.code_review.status = "running"),
+    (state) => (state.checks = state.checks.filter((check) => check.name !== "Security check")),
+    (state) => state.checks.push({ ...state.checks[2], id: 2, conclusion: "failure" }),
     (state) => state.checks.push({ ...state.checks[0], id: 2, conclusion: "failure" }),
     (state) => (state.checks[0].app.id = 1),
     (state) => (state.resolved = false),

@@ -1,7 +1,7 @@
 const BOT_ID = 199175422;
 const REPOSITORY = { owner: "alexander-cato", repo: "t3code-next" };
 
-function completedReviews(comments, head) {
+function completedCodeReview(comments, head) {
   const summaries = comments
     .filter(
       (comment) =>
@@ -22,14 +22,12 @@ function completedReviews(comments, head) {
   } catch {
     return false;
   }
-  return ["code_review", "security_review"].every((kind) => {
-    const review = state?.[kind];
-    return (
-      review?.commit_sha === head &&
-      review.status === "completed" &&
-      review.has_unresolved_findings === false
-    );
-  });
+  const review = state?.code_review;
+  return (
+    review?.commit_sha === head &&
+    review.status === "completed" &&
+    review.has_unresolved_findings === false
+  );
 }
 
 async function mergeReviewedNightly({ github, merger, pullNumber, head, base }) {
@@ -50,16 +48,17 @@ async function mergeReviewedNightly({ github, merger, pullNumber, head, base }) 
     issue_number: pullNumber,
     per_page: 100,
   });
-  if (!completedReviews(comments, head))
+  if (!completedCodeReview(comments, head))
     return pending(
-      "Waiting for completed current-head Codex code and security reviews with no unresolved findings.",
+      "Waiting for a completed current-head Codex code review with no unresolved findings.",
     );
   const checks = await github.paginate(github.rest.checks.listForRef, {
     ...REPOSITORY,
     ref: head,
     per_page: 100,
   });
-  for (const name of ["Check", "Agent context budget"]) {
+  // Codex security reviews report no pass or fail, so the owner's Security workflow gates instead.
+  for (const name of ["Check", "Agent context budget", "Security check"]) {
     const check = checks
       .filter((item) => item.name === name && item.head_sha === head && item.app?.id === 15368)
       .sort((a, b) => b.id - a.id)[0];
@@ -117,4 +116,4 @@ async function mergeReviewedNightly({ github, merger, pullNumber, head, base }) 
   return { merged: merged.merged === true, sha: merged.sha, reason: merged.message };
 }
 
-module.exports = { completedReviews, mergeReviewedNightly };
+module.exports = { completedCodeReview, mergeReviewedNightly };

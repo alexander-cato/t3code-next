@@ -1,0 +1,14 @@
+name: Fork security scan
+
+# .repos/ holds vendored read-only references, about two thirds of the tracked files. Tests and
+# generated notices do not ship, and their fixtures trip credential and injection queries.
+paths-ignore:
+  - .repos
+  - third-party-licenses
+  - "**/node_modules"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.test.cjs"
+  - "**/*.test.mjs"
+  - "**/test/**"
+  - "**/__tests__/**"
