@@ -9,6 +9,7 @@ import * as Ref from "effect/Ref";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import { readChromiumLocalStorage } from "./chromiumLocalStorage.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import { isDesktopForkBuild } from "../forkIdentity.ts";
 
 /** Reads the V1 profile without opening it in Chromium, even while V1 runs. */
 export class DesktopLegacyLocalStorage extends Context.Service<
@@ -72,7 +73,7 @@ const make = Effect.gen(function* () {
   });
 
   const load = Effect.fn("desktop.legacyLocalStorage.load")(function* (userDataPath: string) {
-    if (environment.isDevelopment) return;
+    if (environment.isDevelopment || isDesktopForkBuild) return;
     const marker = path.join(userDataPath, MARKER_FILE_NAME);
     if (yield* fs.exists(marker).pipe(Effect.orElseSucceed(() => true))) return;
     yield* Ref.set(markerPath, Option.some(marker));

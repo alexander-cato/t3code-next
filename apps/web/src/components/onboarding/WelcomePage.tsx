@@ -276,6 +276,14 @@ export function WelcomePage({
             <p className="mt-1.5 text-sm text-muted-foreground">
               Setting up <span className="text-foreground">{label}</span>.
             </p>
+            {window.desktopBridge?.getInstallationDataState &&
+            window.desktopBridge.getAppBranding()?.baseName === "T3 Code Fork" ? (
+              <div className="mt-3">
+                <Button variant="link" render={<Link to="/settings/connections" />}>
+                  Import or connect an existing T3 installation
+                </Button>
+              </div>
+            ) : null}
             <div className="mt-10 border-t border-border/60">
               <AgentsSection
                 environmentId={environmentId}

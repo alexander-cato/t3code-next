@@ -1,6 +1,7 @@
 import { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { providerAuthReturnUrl } from "./providerAuthReturnUrl.ts";
+import { desktopForkIdentity } from "./desktopForkIdentity.ts";
 
 export const CodexAuthHandoff = Schema.Struct({
   authorizationUrl: Schema.String.check(Schema.isMaxLength(16_384)),
@@ -86,8 +87,9 @@ export function codexCallbackUrl(value: string, redirectUri: string, state: stri
   return callback;
 }
 
-export function codexAuthHandoffUrl(input: CodexAuthHandoff, development = false) {
-  const url = new URL(`${development ? "t3code-dev" : "t3code"}://auth/codex`);
+export function codexAuthHandoffUrl(input: CodexAuthHandoff, development = false, fork = false) {
+  const scheme = fork ? desktopForkIdentity.scheme : development ? "t3code-dev" : "t3code";
+  const url = new URL(`${scheme}://auth/codex`);
   url.searchParams.set("request", encodeHandoff(input));
   return url.toString();
 }
@@ -97,7 +99,9 @@ export function readCodexAuthHandoff(value: string, development: boolean) {
     const url = new URL(value);
     if (
       value.length > 32_768 ||
-      url.protocol !== (development ? "t3code-dev:" : "t3code:") ||
+      ![`${desktopForkIdentity.scheme}:`, development ? "t3code-dev:" : "t3code:"].includes(
+        url.protocol,
+      ) ||
       url.host !== "auth" ||
       url.pathname !== "/codex" ||
       url.username ||

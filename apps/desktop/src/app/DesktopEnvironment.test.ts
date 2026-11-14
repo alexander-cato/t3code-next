@@ -72,4 +72,17 @@ describe("DesktopEnvironment", () => {
       assert.equal(production.stateDir, "/Users/alice/.t3/userdata");
     }),
   );
+
+  it.effect("isolates fork identity and database state from the installed nightly", () =>
+    Effect.gen(function* () {
+      const fork = yield* makeEnvironment({ fork: true, appVersion: "0.1.7-nightly.20261104.1" });
+      const upstream = yield* makeEnvironment({ appVersion: "0.1.7-nightly.20261104.1" });
+      assert.equal(fork.stateDir, "/Users/alice/.t3-fork/userdata");
+      assert.equal(fork.displayName, "T3 Code Fork (Nightly)");
+      assert.equal(fork.appUserModelId, "com.alexandercato.t3code.fork");
+      assert.notEqual(fork.baseDir, upstream.baseDir);
+      assert.notEqual(fork.desktopSettingsPath, upstream.desktopSettingsPath);
+      assert.notEqual(fork.appUserModelId, upstream.appUserModelId);
+    }),
+  );
 });

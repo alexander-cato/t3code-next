@@ -3,6 +3,31 @@
 Connect a phone, browser, or another desktop app to T3 Code running on a different
 machine. That machine must stay running and reachable while you work.
 
+## Existing T3 installations in the fork
+
+In T3 Code Fork, open **Settings → Environments → Existing T3 installations**, or choose
+**Import or connect an existing T3 installation** during setup.
+
+- **Import once** makes an independent copy of projects, conversations, attachments, themes,
+  portable saved secrets, provider settings, and app preferences. Close the source app and let
+  unfinished agent work settle first. Select its T3 home or `userdata` folder, then choose
+  **Import and restart**. The fork keeps its own app identity and connection credentials.
+  Imported scheduled tasks and automatic thread resumes start disabled. Enable the ones you
+  want in Scheduled tasks and Settings after importing. Stop active PR watches and thread
+  recovery before importing, or use Keep connected to share them without making a copy.
+  **Restore previous fork data** reverses an import and keeps a backup of the current data.
+- **Keep connected** uses one running environment from both apps. Create a pairing link in the
+  host's **Sharing & access** settings and use **Connect existing environment** in the other app.
+  Changes to projects, conversations, provider settings, tasks, and running agents appear in
+  both apps. The host must stay running. Remove the connection under Environments to stop
+  using shared data.
+
+The connected host runs the backend. To use the fork's backend changes in both apps, first
+import into the fork, then connect the other app to the fork's environment. Otherwise, connect
+from the fork to the existing install's environment. App preferences are copied during an
+import, and remain local afterward. Browser sign-ins, OS permissions, T3 Connect authorization,
+and saved connection credentials stay under each app's controls and may require setup again.
+
 ## T3 Connect
 
 T3 Connect makes an environment available to your other devices without setting

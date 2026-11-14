@@ -4,6 +4,11 @@ import { receiveProviderAuthCallback, cancelProviderAuthCallback } from "./metho
 import * as DesktopIpc from "./DesktopIpc.ts";
 import { installNotificationBadge } from "./methods/notificationBadge.ts";
 import { getClientSettings, setClientSettings } from "./methods/clientSettings.ts";
+import {
+  getInstallationDataState,
+  importInstallationData,
+  restoreInstallationData,
+} from "./methods/installationData.ts";
 import { getConnectionCatalog, setConnectionCatalog } from "./methods/connectionCatalog.ts";
 import {
   getHostEnvironmentId,
@@ -110,6 +115,9 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
 
   yield* ipc.handle(getClientSettings);
   yield* ipc.handle(setClientSettings);
+  yield* ipc.handle(getInstallationDataState);
+  yield* ipc.handle(importInstallationData);
+  yield* ipc.handle(restoreInstallationData);
   yield* ipc.handle(getConnectionCatalog);
   yield* ipc.handle(getSnapShotState);
   yield* ipc.handle(setupSnapShot);
