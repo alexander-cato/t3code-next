@@ -14,6 +14,7 @@ import {
   snapshotComposerSend,
   withMessageContext,
   makeThreadErrorSetter,
+  cloneComposerImageForRetry,
 } from "../ChatView.logic";
 import { isUsageLimitsCommand } from "@t3tools/shared/usageLimits";
 import {
@@ -25,6 +26,7 @@ import {
   type ScopedThreadRef,
   type ThreadId,
   ProviderInteractionMode,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   RuntimeMode,
 } from "@t3tools/contracts";
 import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
@@ -60,6 +62,7 @@ import {
 import { type ChatMessage, DEFAULT_INTERACTION_MODE } from "../../types";
 import { recordPromptSent } from "../GitHubStarPrompt";
 import { stackedThreadToast, toastManager } from "../ui/toast";
+import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { newMessageId, newThreadId } from "~/lib/utils";
 import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
 import { buildThreadRouteParams } from "../../threadRoutes";
@@ -95,6 +98,7 @@ import { environmentServerConfigsAtom } from "../../state/server";
 import { threadEnvironment } from "../../state/threads";
 import { runMobileComposerTransition } from "./draftHeroTransition";
 import { useClientSettingsHydrated } from "../../hooks/useSettings";
+import { useStableCallback } from "../../hooks/useStableCallback";
 import { environmentPresentations } from "../../state/presentation";
 import {
   approvalRedirectNotice,
@@ -215,6 +219,7 @@ interface ComposerSendInput {
   readonly clearUsageLimitsFor: UsageLimitsPanel["clearFor"];
   readonly needsLoadBalancing: boolean;
   readonly loadBalancing: DraftEnvironmentRouting["loadBalancing"];
+  readonly refreshBeforeSend: DraftEnvironmentRouting["refreshBeforeSend"];
   readonly readPendingEnvironmentChange: DraftEnvironmentRouting["readPendingEnvironmentChange"];
   readonly pendingApprovals: PendingThreadRequests["pendingApprovals"];
   readonly respondingRequestIds: PendingThreadRequests["respondingRequestIds"];
@@ -310,6 +315,7 @@ export function useComposerSend(input: ComposerSendInput) {
     clearUsageLimitsFor,
     needsLoadBalancing,
     loadBalancing,
+    refreshBeforeSend,
     readPendingEnvironmentChange,
     pendingApprovals,
     respondingRequestIds,
@@ -432,15 +438,27 @@ export function useComposerSend(input: ComposerSendInput) {
     if (
       !readEnvironmentScope(environmentId, AuthOrchestrationOperateScope) ||
       !activeThread ||
-      (isSendBusy && !sendQueuesBehindSetup) ||
       isRevertingCheckpoint ||
       !clientSettingsHydrated ||
       threadDetailLoading ||
       readPendingEnvironmentChange() !== null ||
-      sendInFlightRef.current ||
       feedbackUploadsInFlightRef.current.has(routeThreadKey)
     ) {
       notifyDirectAnnotationAttached();
+      return;
+    }
+    if ((isSendBusy && !sendQueuesBehindSetup) || sendInFlightRef.current) {
+      if (directAnnotation) {
+        notifyDirectAnnotationAttached();
+      } else {
+        toastManager.add(
+          stackedThreadToast({
+            type: "info",
+            title: "Still sending your previous message.",
+            description: "Send again once it goes through or fails.",
+          }),
+        );
+      }
       return;
     }
     if (needsLoadBalancing) {
@@ -1385,17 +1403,97 @@ export function useComposerSend(input: ComposerSendInput) {
         );
         clearBackgroundDraftSubmissionByRef(scopeThreadRef(environmentId, threadIdForSend));
       }
+      // Only an acknowledged send replaces its optimistic row, so a failed one leaves here.
+      setOptimisticUserMessages((existing) => {
+        const next = existing.filter((message) => message.id !== messageIdForSend);
+        return next.length === existing.length ? existing : next;
+      });
+      // A restored draft clones its images, so the sent copies are no longer used.
+      optimisticBlobPreviews.release(optimisticMessage);
       if (
-        !composerDraftHasUserContent(
+        composerDraftHasUserContent(
           useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
         )
       ) {
-        setOptimisticUserMessages((existing) => {
-          const next = existing.filter((message) => message.id !== messageIdForSend);
-          return next.length === existing.length ? existing : next;
-        });
-        // The restored draft clones its images, so the sent copies are no longer used.
-        optimisticBlobPreviews.release(optimisticMessage);
+        const failedText = sendSnapshot.draftText;
+        const hasAttachments = sendSnapshot.attachments.length > 0;
+        const copyMessage =
+          failedText.trim().length > 0
+            ? {
+                children: "Copy message",
+                onClick: () => {
+                  void writeTextToClipboard(failedText, "failed message").catch(() => undefined);
+                },
+              }
+            : undefined;
+        if (copyMessage || hasAttachments) {
+          const failureToastId = toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: isAtomCommandInterrupted(failure)
+                ? "Message may not have been sent"
+                : "Message not sent",
+              description: hasAttachments
+                ? "Your new draft was kept. Restore the failed attachments to send them again."
+                : "Your new draft was kept. Copy the failed message to send it again.",
+              // The toast owns the failed snapshot until it is recovered or dismissed.
+              timeout: 0,
+              data: {
+                hideCopyButton: true,
+                ...(hasAttachments && copyMessage ? { secondaryActionProps: copyMessage } : {}),
+              },
+              ...(hasAttachments
+                ? {
+                    actionProps: {
+                      children: "Restore attachments",
+                      onClick: () => {
+                        const drafts = useComposerDraftStore.getState();
+                        const current = drafts.getComposerDraft(composerDraftTarget);
+                        const images = sendSnapshot.images.filter(
+                          (image) => !current?.images.some((existing) => existing.id === image.id),
+                        );
+                        const files = sendSnapshot.files.filter(
+                          (file) => !current?.files.some((existing) => existing.id === file.id),
+                        );
+                        if (
+                          (current?.images.length ?? 0) +
+                            (current?.files.length ?? 0) +
+                            images.length +
+                            files.length >
+                          PROVIDER_SEND_TURN_MAX_ATTACHMENTS
+                        ) {
+                          toastManager.update(failureToastId, {
+                            description:
+                              "Make room in your draft, then restore these attachments. They are still kept here.",
+                          });
+                          return;
+                        }
+                        drafts.addImages(
+                          composerDraftTarget,
+                          images.map(cloneComposerImageForRetry),
+                          { allowDuplicates: true },
+                        );
+                        drafts.addFiles(composerDraftTarget, files, { allowDuplicates: true });
+                        if (copyMessage) {
+                          toastManager.update(failureToastId, {
+                            description:
+                              "Attachments restored. Copy the failed message to send it again.",
+                            data: { hideCopyButton: true },
+                            actionProps: copyMessage,
+                          });
+                        } else {
+                          toastManager.close(failureToastId);
+                        }
+                      },
+                    },
+                  }
+                : copyMessage
+                  ? { actionProps: copyMessage }
+                  : {}),
+            }),
+          );
+        }
+      } else {
         const retryComposerImages = restoreComposerDraft(composerDraftTarget, sendSnapshot);
         if (currentRouteThreadKeyRef.current === routeThreadKey) {
           promptRef.current = sendSnapshot.draftText;
@@ -1451,5 +1549,19 @@ export function useComposerSend(input: ComposerSendInput) {
     }
   };
 
-  return { onSend };
+  const onSendLatest = useStableCallback(onSend);
+  const onSendWithRouting = async (...args: Parameters<typeof onSend>) => {
+    args[0]?.preventDefault();
+    const refresh =
+      args[3] || sendInFlightRef.current || readPendingEnvironmentChange() !== null
+        ? null
+        : refreshBeforeSend();
+    if (refresh === null) return onSend(...args);
+    sendInFlightRef.current = true;
+    const ready = await refresh.finally(() => {
+      sendInFlightRef.current = false;
+    });
+    if (ready) return onSendLatest(...args);
+  };
+  return { onSend: onSendWithRouting };
 }
