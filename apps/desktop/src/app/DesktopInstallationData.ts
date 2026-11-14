@@ -7,6 +7,7 @@ import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -51,7 +52,7 @@ export class DesktopInstallationDataUnavailable extends Schema.TaggedError<Deskt
       case "source-missing":
         return "This folder does not contain a T3 Code database. Choose a T3 home folder or its userdata folder.";
       case "source-busy":
-        return "The source has unfinished work, a PR watch, or automatic recovery enabled for a thread. Finish or stop it before importing, or use Keep connected.";
+        return "The source has unfinished agent work. Open it and let the work finish or stop it before importing, or use Keep connected.";
       case "unsafe-path":
         return "The import contains a link outside its data folder or an invalid backup path.";
       case "pending-import":
@@ -138,6 +139,65 @@ const processAlive = (pid: number) => {
   }
 };
 
+// Work the imported server would interrupt at startup, so the source finishes or stops it first.
+const unfinishedWork = [
+  ["orchestration_v2_effect_outbox", "status IN ('pending', 'running')"],
+  [
+    "orchestration_v2_projection_runs",
+    "status IN ('preparing', 'queued', 'starting', 'running', 'waiting')",
+  ],
+  ["orchestration_v2_projection_runtime_requests", "status = 'pending'"],
+  [
+    "orchestration_v2_projection_provider_sessions",
+    "status NOT IN ('ready', 'stopped', 'error') OR (status IN ('ready', 'error') AND json_valid(payload_json) AND json_array_length(payload_json, '$.extensionStatuses') > 0)",
+  ],
+  [
+    "orchestration_v2_projection_provider_threads",
+    "status = 'active' OR (json_valid(payload_json) AND (json_array_length(payload_json, '$.pendingBackgroundTasks') > 0 OR json_extract(payload_json, '$.goal.status') = 'active'))",
+  ],
+] as const;
+
+// Ends PR watches the way stopping one does (watch becomes endedWatch) and disarms limit auto-resume.
+const pauseThreadAutomation = `
+  UPDATE orchestration_v2_projection_threads
+  SET payload_json = json_set(payload_json, '$.limitRecovery.autoResume', json('false'))
+  WHERE json_valid(payload_json) AND json_extract(payload_json, '$.limitRecovery.autoResume') = 1;
+  UPDATE orchestration_v2_projection_threads
+  SET payload_json = json_set(payload_json, '$.pullRequests', json((
+    SELECT json_group_array(
+      CASE WHEN json_type(link.value, '$.watch') = 'object'
+        THEN json_set(json_remove(link.value, '$.watch'), '$.endedWatch',
+          json(json_extract(link.value, '$.watch')))
+        ELSE json(link.value) END
+      ORDER BY link.key)
+    FROM json_each(payload_json, '$.pullRequests') AS link)))
+  WHERE json_valid(payload_json) AND EXISTS (
+    SELECT 1 FROM json_each(payload_json, '$.pullRequests') AS link
+    WHERE json_type(link.value, '$.watch') = 'object');
+`;
+
+const JsonObject = Schema.Record(Schema.String, Schema.Unknown);
+const isJsonObject = Schema.is(JsonObject);
+const pauseSettings = (settings: Readonly<Record<string, unknown>>) => {
+  const overrides = settings.projectSettingsOverrides;
+  return {
+    ...settings,
+    autoResumeLimitedThreads: false,
+    continueThreadsAfterServerUpdate: false,
+    ...(isJsonObject(overrides) && {
+      // A project that opted in would keep continuing threads; it now inherits the global off.
+      projectSettingsOverrides: Object.fromEntries(
+        Object.entries(overrides).map(([projectId, entry]) => {
+          if (!isJsonObject(entry) || entry.continueThreadsAfterServerUpdate !== true)
+            return [projectId, entry];
+          const { continueThreadsAfterServerUpdate: _, ...rest } = entry;
+          return [projectId, rest];
+        }),
+      ),
+    }),
+  };
+};
+
 const snapshotDatabase = Effect.fn("desktop.installationData.snapshotDatabase")(function* (
   source: string,
   destination: string,
@@ -162,50 +222,14 @@ const snapshotDatabase = Effect.fn("desktop.installationData.snapshotDatabase")(
           throw new DesktopInstallationDataUnavailable({ reason: "source-missing" });
         if (String(copy.prepare("PRAGMA quick_check").get()?.quick_check) !== "ok")
           throw new Error("Invalid database snapshot");
-        for (const [table, condition] of [
-          ["orchestration_v2_effect_outbox", "status IN ('pending', 'running')"],
-          [
-            "orchestration_v2_projection_runs",
-            "status IN ('preparing', 'queued', 'starting', 'running', 'waiting')",
-          ],
-          ["orchestration_v2_projection_runtime_requests", "status = 'pending'"],
-          [
-            "orchestration_v2_projection_provider_sessions",
-            "status NOT IN ('ready', 'stopped', 'error') OR (json_valid(payload_json) AND json_array_length(payload_json, '$.extensionStatuses') > 0)",
-          ],
-          [
-            "orchestration_v2_projection_provider_threads",
-            "status = 'active' OR (json_valid(payload_json) AND (json_array_length(payload_json, '$.pendingBackgroundTasks') > 0 OR json_extract(payload_json, '$.goal.status') = 'active'))",
-          ],
-          [
-            "orchestration_v2_projection_threads",
-            `json_valid(payload_json) AND (
-              EXISTS (SELECT 1 FROM json_each(payload_json, '$.pullRequests') AS link
-                WHERE json_type(link.value, '$.watch') = 'object')
-              OR (json_extract(payload_json, '$.limitRecovery.autoResume') = 1
-                AND json_extract(payload_json, '$.limitRecovery.runId') = (
-                  SELECT latest.run_id FROM orchestration_v2_projection_runs latest
-                  WHERE latest.thread_id = orchestration_v2_projection_threads.thread_id
-                    AND latest.status <> 'queued'
-                    AND NOT (latest.status = 'cancelled'
-                      AND json_extract(latest.payload_json, '$.startedAt') IS NULL)
-                  ORDER BY latest.completed_at IS NULL DESC, latest.completed_at DESC,
-                    latest.ordinal DESC, latest.run_id DESC
-                  LIMIT 1
-                ))
-            )`,
-          ],
-        ] as const) {
+        for (const [table, condition] of unfinishedWork)
           if (
             tables.has(table) &&
-            Number(
-              copy.prepare(`SELECT COUNT(*) AS count FROM "${table}" WHERE ${condition}`).get()
-                ?.count,
-            ) > 0
-          ) {
+            copy
+              .prepare(`SELECT EXISTS (SELECT 1 FROM "${table}" WHERE ${condition}) AS busy`)
+              .get()?.busy === 1
+          )
             throw new DesktopInstallationDataUnavailable({ reason: "source-busy" });
-          }
-        }
         const cleared = new Set([
           "auth_sessions",
           "auth_pairing_links",
@@ -232,6 +256,7 @@ const snapshotDatabase = Effect.fn("desktop.installationData.snapshotDatabase")(
           if (tables.has(table)) copy.exec(`DELETE FROM "${table.replaceAll('"', '""')}"`);
         if (tables.has("scheduled_tasks"))
           copy.exec("UPDATE scheduled_tasks SET enabled = 0, next_run_at = NULL");
+        if (tables.has("orchestration_v2_projection_threads")) copy.exec(pauseThreadAutomation);
         copy.exec("COMMIT");
       } finally {
         copy.close();
@@ -419,19 +444,16 @@ export const make = Effect.gen(function* () {
         }
       }
       const settingsPath = path.join(stage, "settings.json");
-      if (yield* fs.exists(settingsPath)) {
-        const settings = yield* fs
-          .readFileString(settingsPath)
-          .pipe(Effect.flatMap(decodeSettings));
+      const settings = yield* decodeSettings(
+        (yield* fs.exists(settingsPath)) ? yield* fs.readFileString(settingsPath) : "{}",
+      ).pipe(Effect.option);
+      // An unreadable file stays for the user to repair; the server then leaves continuation off.
+      if (Option.isSome(settings))
         yield* fs.writeFileString(
           settingsPath,
-          yield* encodeSettings({
-            ...settings,
-            autoResumeLimitedThreads: false,
-            continueThreadsAfterServerUpdate: false,
-          }),
+          yield* encodeSettings(pauseSettings(settings.value)),
+          { mode: 0o600 },
         );
-      }
       if (yield* fs.exists(environment.stateDir)) {
         const ownState = yield* fs.realPath(environment.stateDir);
         for (const name of [

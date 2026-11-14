@@ -116,11 +116,24 @@ with your own Cua commands are not listed.
 
 When **Agents can use devices** is on, agents open VMs with `device_open`, which
 floats the VM over the chat or opens a tab the same way as a device. They drive
-the desktop with `vm_control`, run guest commands with `vm_exec`, and copy files
-from the thread's workspace with `vm_upload`. Source editing and Git stay in your
-workspace. Install Xcode inside the guest if a build needs the full toolchain,
-and grant the test app's Accessibility or Screen Recording permissions there when
-prompted.
+the desktop with `vm_control` and run guest commands with `vm_exec`. A build or
+test suite runs as a background job that the agent reads with `vm_job`, so it
+has no time limit. `vm_upload` copies a file from the thread's workspace into
+the guest and `vm_download` copies one back. Source editing and Git stay in your
+workspace.
+
+Opening a VM tells the agent which macOS it runs, its size, and whether Xcode is
+installed. The Tahoe image has the Command Line Tools only, so install Xcode in
+the guest before asking an agent to build an Xcode project or run XCTest there.
+Suspending a VM from the Device panel ends every agent's session on it. The next
+call from an agent that was using it explains why, and the agent has to open the
+VM again. An agent cannot suspend a VM that another thread has open.
+
+To give each task a clean machine, prepare one VM, install what your project
+needs such as Xcode, and suspend it. An agent can then clone it with `vm_create`
+and `from`. The clone starts in seconds with the base's apps and permission
+grants, and the agent deletes it when done. Each running clone takes one of the
+two macOS VM slots.
 
 In the mobile app, the thread's **Devices** menu lists what is open and starts
 or opens any VM. The viewer can reconnect, close the thread's view, or suspend
