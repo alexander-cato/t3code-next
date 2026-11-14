@@ -1,0 +1,67 @@
+name: Sync upstream nightly
+
+on:
+  workflow_dispatch:
+    inputs:
+      retry:
+        description: Dispatch checks again for the unchanged nightly PR
+        type: boolean
+        default: false
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-upstream-nightly
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: >-
+      github.repository == 'alexander-cato/t3code-next' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' || vars.FORK_SYNC_ENABLED == 'true')
+    runs-on: ubuntu-24.04
+    environment: fork-sync
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: write
+      checks: read
+      issues: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Grant the sync App access only to this repository
+        id: sync_app
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ vars.FORK_SYNC_APP_ID }}
+          private-key: ${{ secrets.FORK_SYNC_APP_PRIVATE_KEY }}
+          owner: alexander-cato
+          repositories: t3code-next
+          permission-contents: write
+          permission-workflows: write
+      - name: Mirror the published nightly and propose its merge
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          RETRY_CHECKS: ${{ inputs.retry }}
+          AUTO_MERGE: ${{ vars.FORK_SYNC_AUTO_MERGE }}
+          SYNC_TOKEN: ${{ steps.sync_app.outputs.token }}
+          CI_TOKEN: ${{ github.token }}
+        with:
+          github-token: ${{ steps.sync_app.outputs.token }}
+          script: |
+            const { syncUpstreamNightly } = require('./.github/scripts/sync-upstream-nightly.cjs');
+            const control = new github.constructor({ auth: process.env.CI_TOKEN });
+            const result = await syncUpstreamNightly({ github: control, candidateGithub: github, context,
+              retry: process.env.RETRY_CHECKS === 'true', autoMerge: process.env.AUTO_MERGE === 'true',
+              token: process.env.SYNC_TOKEN });
+            core.info(JSON.stringify(result));
+            await core.summary.addHeading('Nightly sync').addRaw(result.review?.reason || result.reason || 'Nightly PR updated.').write();
