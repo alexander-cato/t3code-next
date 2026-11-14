@@ -135,6 +135,17 @@ and `from`. The clone starts in seconds with the base's apps and permission
 grants, and the agent deletes it when done. Each running clone takes one of the
 two macOS VM slots.
 
+The source of a clone can also be a macOS VM in Lume that T3 did not create,
+such as a macOS 27 base with Xcode. `device_list` shows these under the host
+with `managed: false`. `vm_create` with `from` copies a stopped one with
+`lume clone` and adds only the copy to T3, so the source is never started or
+changed. The copy starts stopped, and `device_open` boots it. T3 Code reaches
+the copy over Lume's local network, so allow the app that runs the environment
+server in **System Settings → Privacy & Security → Local Network**. The guest
+must run Cua's guest service the way Cua's own images do; see
+[macOS 27 guests](../internals/devices.md#macos-27-guests). To change such a
+base, clone it, change the clone in T3, suspend it, and clone that from then on.
+
 In the mobile app, the thread's **Devices** menu lists what is open and starts
 or opens any VM. The viewer can reconnect, close the thread's view, or suspend
 the VM. Create, delete, and turn VMs on from web or desktop.

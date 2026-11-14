@@ -240,6 +240,7 @@ const fixture = Effect.fn("vm.fixture")(function* (options?: {
       Layer.provide(Layer.succeed(ProcessRunner.ProcessRunner, runner)),
       Layer.provide(Layer.succeed(HostProcess.Platform, options?.platform ?? "darwin")),
       Layer.provide(Layer.succeed(HostProcess.Architecture, "arm64")),
+      Layer.provide(Layer.succeed(HostProcess.HomeDirectory, root)),
       Layer.provide(Layer.succeed(HostProcess.Environment, { PATH: bin, ...options?.environment })),
     ),
   );
@@ -2011,7 +2012,7 @@ it.effect("lists every macOS VM in Lume's store and marks the ones T3 cannot ope
   ),
 );
 
-it.effect("clones only a suspended VM it manages, through a fork rather than a download", () =>
+it.effect("clones only a stopped VM, through a fork or Lume rather than a download", () =>
   provide(
     Effect.gen(function* () {
       const running = yield* fixture({ machines: ["base"], status: "ready" });
@@ -2043,6 +2044,77 @@ it.effect("clones only a suspended VM it manages, through a fork rather than a d
         "copy",
       ]);
       expect(calls.some((call) => call.args.includes("create"))).toBe(false);
+
+      // A Lume VM that Cua did not make is cloned with Lume, and only the clone is registered.
+      const outside = yield* fixture({
+        lume: output(
+          json([
+            {
+              name: "macos27-base",
+              status: "stopped",
+              os: "macOS",
+              cpuCount: 8,
+              memorySize: 10 * 1024 ** 3,
+            },
+            { name: "nt-ci-1", status: "running", os: "macOS" },
+          ]),
+        ),
+      });
+      yield* outside.vms.list;
+      const rejected = (input: { name: string; from: string }) =>
+        outside.vms.create({ ...input, cpu: 4, memoryGb: 8 }).pipe(
+          Effect.flip,
+          Effect.map((error) => error.reason),
+        );
+      expect(yield* rejected({ name: "copy", from: "nt-ci-1" })).toBe("source-running");
+      expect(yield* rejected({ name: "nt-ci-1", from: "macos27-base" })).toBe("already-exists");
+      const records = outside.path.join(outside.root, "userdata", "virtual-machines", "cua");
+      const record = Effect.fn("record")(function* (name: string) {
+        const file = outside.path.join(records, `${name}.json`);
+        return {
+          mode: Number((yield* outside.fs.stat(file)).mode) & 0o777,
+          contents: JSON.parse(yield* outside.fs.readFileString(file)),
+        };
+      });
+      for (const name of ["m27-a", "m27-b"]) {
+        const done = yield* outside.vms.subscribe;
+        yield* outside.vms.create({ name, cpu: 4, memoryGb: 8, from: "macos27-base" });
+        yield* Stream.fromSubscription(done).pipe(
+          Stream.filter((state) => state.operations.length === 0),
+          Stream.runHead,
+        );
+      }
+      expect(
+        outside.calls.filter((call) => call.args[0] === "clone").map((call) => call.args),
+      ).toEqual([
+        ["clone", "macos27-base", "m27-a"],
+        ["clone", "macos27-base", "m27-b"],
+      ]);
+      expect(outside.calls.some((call) => ["fork", "create"].includes(call.args[5]!))).toBe(false);
+      const first = yield* record("m27-a");
+      const second = yield* record("m27-b");
+      expect(first.mode).toBe(0o600);
+      expect(first.contents).toMatchObject({
+        name: "m27-a",
+        runtime_type: "lume",
+        cpu_count: 8,
+        memory_mb: 10240,
+        status: "stopped",
+        image_info: { spacesd: true },
+      });
+      // Each clone gets its own guest token, which Cua shares with the guest at every start.
+      expect(first.contents.env_token).toMatch(/^[a-f0-9]{64}$/);
+      expect(second.contents.env_token).not.toBe(first.contents.env_token);
+      const vmm = outside.path.join(outside.root, ".cua", "vmm", "lume", "m27-a");
+      const token = outside.path.join(vmm, "setup", "env-token");
+      expect(yield* outside.fs.readFileString(token)).toBe(first.contents.env_token);
+      expect(Number((yield* outside.fs.stat(token)).mode) & 0o777).toBe(0o600);
+      expect(yield* outside.fs.readFileString(outside.path.join(vmm, "ports.json"))).toBe("[3211]");
+      expect(
+        yield* outside.fs.exists(
+          outside.path.join(outside.root, ".cua", "vmm", "lume", "macos27-base"),
+        ),
+      ).toBe(false);
     }),
   ),
 );

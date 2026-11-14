@@ -21,7 +21,7 @@ export const VirtualMachineCreateInput = Schema.Struct({
   from: Schema.optional(
     VirtualMachineName.annotate({
       description:
-        "Clone this suspended VM instead of downloading a new one. The clone is a new machine with the source's disk, apps and permission grants, ready in seconds.",
+        "Clone this stopped or suspended VM instead of downloading a new one. It can also be a macOS VM that device_list shows under host with managed: false, such as a macOS 27 base. The clone is a new machine with the source's disk, apps and permission grants, ready in seconds.",
     }),
   ),
 });
@@ -142,7 +142,7 @@ export const VirtualMachineHostMachine = Schema.Struct({
   status: Schema.String,
   cpu: Schema.NullOr(Schema.Number),
   memoryGb: Schema.NullOr(Schema.Number),
-  // False for Lume VMs other tools created; T3 lists them but cannot open them.
+  // False for Lume VMs other tools created. T3 cannot open them, but vm_create can clone a stopped one.
   managed: Schema.Boolean,
 });
 export const VirtualMachineHostInventory = Schema.Struct({

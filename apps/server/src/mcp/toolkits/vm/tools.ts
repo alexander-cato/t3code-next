@@ -39,7 +39,7 @@ const done = Schema.Struct({ message: Schema.String });
 
 const create = Tool.make("vm_create", {
   description:
-    "Create a local macOS VM with Cua desktop control. Without from it downloads a new macOS Tahoe image with the Command Line Tools, which takes a long time and about 60 GB of disk. With from it clones a suspended VM in seconds, keeping its installed apps such as Xcode, so a task can start from a prepared base and throw the clone away with vm_delete. Returns at once; device_list reports progress and failures. A new VM starts running and takes one of the two macOS VM slots. Host files are not shared.",
+    "Create a local macOS VM with Cua desktop control. Without from it downloads a new macOS Tahoe image with the Command Line Tools, which takes a long time and about 60 GB of disk. With from it clones a suspended VM in seconds, keeping its installed apps such as Xcode, so a task can start from a prepared base and throw the clone away with vm_delete. For macOS 27, clone a prepared macOS 27 base from device_list's host list. Returns at once; device_list reports progress and failures. A new VM starts running and takes one of the two macOS VM slots. Host files are not shared.",
   parameters: VirtualMachineCreateInput,
   success: done,
   failure,
