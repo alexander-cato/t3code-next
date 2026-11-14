@@ -27,7 +27,15 @@ const fixture = Effect.gen(function* () {
   yield* fs.writeFileString(path.join(source, "client-settings.json"), '{"theme":"dark"}');
   yield* fs.writeFileString(
     path.join(source, "settings.json"),
-    '{"autoResumeLimitedThreads":true,"continueThreadsAfterServerUpdate":true,"theme":"dark"}',
+    JSON.stringify({
+      autoResumeLimitedThreads: true,
+      continueThreadsAfterServerUpdate: true,
+      theme: "dark",
+      projectSettingsOverrides: {
+        "opted-in": { continueThreadsAfterServerUpdate: true, defaultAutoPull: true },
+        "opted-out": { continueThreadsAfterServerUpdate: false },
+      },
+    }),
   );
   yield* fs.writeFileString(path.join(source, "environment-id"), "source-environment");
   yield* fs.writeFileString(path.join(source, "server-owner.sqlite"), "source-only ownership");
@@ -130,11 +138,15 @@ it.effect(
       f.database.exec(`
         INSERT INTO orchestration_v2_projection_runs VALUES
           ('failed', 'old-run', 'history', '2026-11-01T00:00:00Z', 1, '{}'),
-          ('completed', 'new-run', 'history', '2026-11-02T00:00:00Z', 2, '{}');
+          ('completed', 'new-run', 'history', '2026-11-02T00:00:00Z', 2, '{}'),
+          ('failed', 'limited-run', 'limited', '2026-11-01T00:00:00Z', 1, '{}');
         INSERT INTO orchestration_v2_projection_threads VALUES
-          ('{"limitRecovery":{"autoResume":true,"runId":"old-run"}}', 'history');
+          ('{"limitRecovery":{"autoResume":true,"runId":"old-run"}}', 'history'),
+          ('{"limitRecovery":{"autoResume":true,"runId":"limited-run","resetAt":"2026-11-01T05:00:00Z"}}', 'limited'),
+          ('{"pullRequests":[{"number":1,"watch":{"startedAt":"2026-11-01T00:00:00Z"},"endedWatch":{"startedAt":"2026-10-01T00:00:00Z"}},{"number":2}]}', 'watched');
         INSERT INTO orchestration_v2_projection_provider_sessions VALUES
-          ('ready', '{}'), ('ready', '{"extensionStatuses":[]}');
+          ('ready', '{}'), ('ready', '{"extensionStatuses":[]}'),
+          ('stopped', '{"extensionStatuses":[{"key":"watch","text":"Watching"}]}');
       `);
       for (const [directory, token] of [
         [f.source, "source-connect-token"],
@@ -166,13 +178,37 @@ it.effect(
         assert.equal(copy.prepare("SELECT COUNT(*) AS count FROM session_child").get()?.count, 0);
         assert.equal(copy.prepare("SELECT enabled FROM scheduled_tasks").get()?.enabled, 0);
         assert.isNull(copy.prepare("SELECT next_run_at FROM scheduled_tasks").get()?.next_run_at);
+        const threads = Object.fromEntries(
+          copy
+            .prepare("SELECT thread_id, payload_json FROM orchestration_v2_projection_threads")
+            .all()
+            .map((row) => [String(row.thread_id), JSON.parse(String(row.payload_json))]),
+        );
+        assert.deepEqual(threads.history.limitRecovery, { autoResume: false, runId: "old-run" });
+        assert.deepEqual(threads.limited.limitRecovery, {
+          autoResume: false,
+          runId: "limited-run",
+          resetAt: "2026-11-01T05:00:00Z",
+        });
+        assert.deepEqual(threads.watched.pullRequests, [
+          { number: 1, endedWatch: { startedAt: "2026-11-01T00:00:00Z" } },
+          { number: 2 },
+        ]);
       } finally {
         copy.close();
       }
       assert.equal(f.database.prepare("SELECT enabled FROM scheduled_tasks").get()?.enabled, 1);
-      assert.equal(
-        yield* f.fs.readFileString(f.path.join(f.target, "settings.json")),
-        '{"autoResumeLimitedThreads":false,"continueThreadsAfterServerUpdate":false,"theme":"dark"}',
+      assert.deepEqual(
+        JSON.parse(yield* f.fs.readFileString(f.path.join(f.target, "settings.json"))),
+        {
+          autoResumeLimitedThreads: false,
+          continueThreadsAfterServerUpdate: false,
+          theme: "dark",
+          projectSettingsOverrides: {
+            "opted-in": { defaultAutoPull: true },
+            "opted-out": { continueThreadsAfterServerUpdate: false },
+          },
+        },
       );
       assert.include(
         yield* f.fs.readFileString(f.path.join(f.source, "settings.json")),
@@ -278,14 +314,7 @@ it.effect(
       else assert.fail("Import should reject pending agent effects");
       assert.isFalse(yield* f.fs.exists(f.path.join(f.base, "pending-installation-import.json")));
       f.database.exec("DELETE FROM orchestration_v2_effect_outbox");
-      f.database.exec(`INSERT INTO orchestration_v2_projection_runs VALUES
-        ('failed', 'latest-run', 'thread', '2026-11-01T00:00:00Z', 1, '{}')`);
       for (const [table, values] of [
-        [
-          "orchestration_v2_projection_threads",
-          ['{"limitRecovery":{"autoResume":true,"runId":"latest-run"}}', "thread"],
-        ],
-        ["orchestration_v2_projection_threads", ['{"pullRequests":[{"watch":{}}]}', "thread"]],
         ["orchestration_v2_projection_provider_threads", ["active", "{}"]],
         [
           "orchestration_v2_projection_provider_threads",
@@ -298,6 +327,10 @@ it.effect(
         [
           "orchestration_v2_projection_provider_sessions",
           ["ready", '{"extensionStatuses":[{"key":"watch","text":"Watching"}]}'],
+        ],
+        [
+          "orchestration_v2_projection_provider_sessions",
+          ["error", '{"extensionStatuses":[{"key":"watch","text":"Watching"}]}'],
         ],
         ["orchestration_v2_projection_runtime_requests", ["pending"]],
         ["orchestration_v2_projection_runs", ["running", "busy-run", "thread", null, 2, "{}"]],
@@ -352,6 +385,24 @@ it.effect(
         "fork data before import",
       );
     }).pipe(Effect.scoped, Effect.provide(dependencies)),
+);
+
+it.effect("pauses continuation without a source settings file and keeps an unreadable one", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture;
+    const settings = f.path.join(f.source, "settings.json");
+    yield* f.fs.remove(settings);
+    yield* f.data.prepare(f.source);
+    yield* f.data.applyPending;
+    assert.deepEqual(
+      JSON.parse(yield* f.fs.readFileString(f.path.join(f.target, "settings.json"))),
+      { autoResumeLimitedThreads: false, continueThreadsAfterServerUpdate: false },
+    );
+    yield* f.fs.writeFileString(settings, '{"theme":');
+    yield* f.data.prepare(f.source);
+    yield* f.data.applyPending;
+    assert.equal(yield* f.fs.readFileString(f.path.join(f.target, "settings.json")), '{"theme":');
+  }).pipe(Effect.scoped, Effect.provide(dependencies)),
 );
 
 it.effect(
