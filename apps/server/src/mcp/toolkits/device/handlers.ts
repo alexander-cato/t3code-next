@@ -9,7 +9,8 @@ import {
   DeviceToolUnavailableError,
   LOCAL_DEVICE_HOST_ID,
   type ThreadId,
-  type VirtualMachineError,
+  VirtualMachineError,
+  type VirtualMachineGuest,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
@@ -232,12 +233,34 @@ const pickDevice = Effect.fn("handlers.pickDevice")(function* (
 
 const toolError = (error: DeviceError | DeviceToolUnavailableError | VirtualMachineError) => error;
 
-const VIRTUAL_MACHINE_QUICK_START = [
-  "The user is watching this macOS VM in the Device panel. Everything runs inside the guest, not on the host Mac.",
-  "Use vm_tools for the Cua desktop tool schemas, vm_control for guest input, vm_exec for guest shell commands, vm_upload to copy a workspace file in, and device_screenshot with virtualMachine to look.",
-  "Source editing and Git stay in the working repository; transfer only the source or build artifacts needed for testing. Grant the test app's Accessibility and Screen Recording permissions inside the guest when needed.",
-  "Replay drags, shortcuts and animations before reporting them verified. device_close with shutdown: true suspends the VM.",
-].join("\n");
+const virtualMachineQuickStart = (
+  guest: VirtualMachineGuest | null | undefined,
+  otherThreads: number,
+) =>
+  [
+    "The user is watching this macOS VM in the Device panel. Everything runs inside the guest, not on the host Mac. Build, test and launch the app under test here, not on the host.",
+    guest
+      ? [
+          `Guest: macOS ${guest.macos}, ${guest.cpu ?? "?"} CPUs, ${guest.memoryGb ?? "?"} GB memory, ${guest.diskFreeGb ?? "?"} GB free, user ${guest.user}.`,
+          guest.xcode
+            ? `${guest.xcode} is installed, so xcodebuild and XCTest run here.`
+            : "No Xcode is installed, only what the Command Line Tools provide. xcodebuild and XCTest will not run here, so tell the user if the task needs them.",
+        ].join(" ")
+      : "The guest did not answer the capability probe. Check its tools with vm_exec before planning around them.",
+    "vm_exec runs a shell command and takes cwd and timeoutSeconds. Start a build or test suite with background: true and read it with vm_job, so a long run cannot hit the limit.",
+    "No host folder is mounted. vm_upload copies one workspace file in and vm_download copies one guest file back. For a source tree or app bundle, make a tar archive, copy it, and unpack it on the other side. Source editing and Git stay in the working repository.",
+    "vm_tools lists the Cua desktop tools, vm_tools with tools: [names] returns their schemas, vm_control calls one, and device_screenshot with virtualMachine looks at the screen. Synthetic key events may not trigger an app's registered global hot keys; send those with osascript and System Events.",
+    guest?.passwordlessSudo
+      ? "sudo needs no password."
+      : "sudo asks for a password. Images from Cua and Lume set it to the user name, so pipe that to sudo -S. If it fails, ask the user.",
+    guest?.sipEnabled === false
+      ? "SIP is off, so grant an app Accessibility, Screen Recording or Input Monitoring by adding rows to /Library/Application Support/com.apple.TCC/TCC.db with sudo sqlite3, using the app's code requirement from codesign -dr -."
+      : "Grant an app Accessibility or Screen Recording through System Settings with vm_control.",
+    otherThreads > 0
+      ? `${otherThreads} other thread${otherThreads === 1 ? " has" : "s have"} this VM open. device_close with shutdown: true suspends it for all of them, so close without shutdown.`
+      : "device_close releases this thread's session and leaves the VM running. shutdown: true suspends it for every thread and the user.",
+    "Replay drags, shortcuts and animations before reporting them verified.",
+  ].join("\n");
 
 const hostRunsVirtualMachines = Effect.gen(function* () {
   return (
@@ -253,6 +276,14 @@ const listVirtualMachines = Effect.fn("handlers.listVirtualMachines")(function* 
   const vms = yield* VirtualMachineService.VirtualMachineService;
   // A failed inventory refresh still reports the last known machines.
   const state = yield* vms.list.pipe(Effect.catch(() => vms.state));
+  const openInOtherThreads: Record<string, number> = {};
+  for (const session of state.sessions)
+    if (session.threadId !== threadId)
+      openInOtherThreads[session.name] = (openInOtherThreads[session.name] ?? 0) + 1;
+  // Listing still works when Lume cannot be read; the host inventory is then left out.
+  const host = state.enabled
+    ? yield* vms.hostInventory.pipe(Effect.orElseSucceed(() => undefined))
+    : undefined;
   return {
     enabled: state.enabled,
     available: state.available,
@@ -262,6 +293,9 @@ const listVirtualMachines = Effect.fn("handlers.listVirtualMachines")(function* 
     open: state.sessions
       .filter((session) => session.threadId === threadId)
       .map((session) => session.name),
+    guests: yield* vms.knownGuests,
+    openInOtherThreads,
+    ...(host === undefined ? {} : { host }),
   };
 });
 
@@ -318,8 +352,19 @@ const handlers = {
       const scope = yield* requireDeviceAccess;
       if (input.virtualMachine !== undefined) {
         const vms = yield* VirtualMachineService.VirtualMachineService;
-        yield* vms.open({ name: input.virtualMachine, threadId: scope.thread.threadId });
-        return { virtualMachine: input.virtualMachine, quickStart: VIRTUAL_MACHINE_QUICK_START };
+        const threadId = scope.thread.threadId;
+        yield* vms.open({ name: input.virtualMachine, threadId });
+        // The VM is open either way. A guest that cannot answer yet only loses the summary.
+        const guest = yield* vms
+          .inspect(threadId, input.virtualMachine)
+          .pipe(Effect.orElseSucceed(() => null));
+        const otherThreads = yield* vms.otherSessions(threadId, input.virtualMachine);
+        return {
+          virtualMachine: input.virtualMachine,
+          quickStart: virtualMachineQuickStart(guest, otherThreads),
+          guest,
+          otherThreads,
+        };
       }
       const devices = yield* DeviceService.DeviceService;
       const state = yield* devices.list;
@@ -444,8 +489,21 @@ const handlers = {
       const scope = yield* requireDeviceAccess;
       const threadId = scope.thread.threadId;
       const vms = yield* VirtualMachineService.VirtualMachineService;
-      const closeVirtualMachine = (name: string) =>
-        input.shutdown ? vms.stop(name) : vms.close({ name, threadId });
+      // An agent's suspend would silently end other threads' sessions, so it may only
+      // suspend a VM no other thread holds. The user can still suspend from the panel.
+      const closeVirtualMachine = Effect.fn("handlers.closeVirtualMachine")(function* (
+        name: string,
+      ) {
+        if (!input.shutdown) return yield* vms.close({ name, threadId });
+        const otherThreads = yield* vms.otherSessions(threadId, name);
+        if (otherThreads > 0)
+          return yield* new VirtualMachineError({
+            operation: "stop",
+            reason: "shared",
+            otherThreads,
+          });
+        yield* vms.stop(name);
+      });
       if (input.virtualMachine !== undefined) {
         yield* closeVirtualMachine(input.virtualMachine);
         return {};

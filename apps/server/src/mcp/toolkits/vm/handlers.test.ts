@@ -89,6 +89,25 @@ const vmState = {
   sessions: [{ name: "native-tile", threadId }],
   operations: [],
 };
+const guest = {
+  macos: "26.5.2",
+  cpu: 4,
+  memoryGb: 8,
+  diskFreeGb: 117,
+  user: "lume",
+  xcode: null,
+  swift: "Swift 6.3.3",
+  homebrew: false,
+  sipEnabled: false,
+  passwordlessSudo: false,
+};
+const hostInventory = {
+  runningLimit: 2,
+  machines: [
+    { name: "native-tile", status: "running", cpu: 4, memoryGb: 8, managed: true },
+    { name: "ci-base", status: "stopped", cpu: 12, memoryGb: 16, managed: false },
+  ],
+};
 const encodeResult = Schema.encodeEffect(Schema.toCodecJson(McpSchema.CallToolResult));
 const decodeGuestResult = Schema.decodeUnknownSync(McpSchema.CallToolResult);
 const decodeGuestTools = Schema.decodeUnknownSync(Schema.Array(McpSchema.Tool));
@@ -183,7 +202,18 @@ it.effect("encodes decoded guest tool schemas as public MCP JSON", () => {
   );
   return Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
-    const result = yield* server.callTool({ name: "vm_tools", arguments: { name: "native-tile" } });
+    // Without names the reply is a short index; schemas come only for the tools asked for.
+    const index = yield* server.callTool({ name: "vm_tools", arguments: { name: "native-tile" } });
+    expect(index.structuredContent).toEqual({ tools: [{ name: "move_mouse" }] });
+    const none = yield* server.callTool({
+      name: "vm_tools",
+      arguments: { name: "native-tile", tools: ["hotkey"] },
+    });
+    expect(none.structuredContent).toEqual([]);
+    const result = yield* server.callTool({
+      name: "vm_tools",
+      arguments: { name: "native-tile", tools: ["move_mouse"] },
+    });
     const encoded = yield* encodeResult(result);
     expect(encoded).toMatchObject({
       isError: false,
@@ -234,18 +264,43 @@ it.effect.each(["vm_control", "device_screenshot"] as const)(
 
 it.effect("lists, opens, and closes VMs through the device tools", () => {
   const calls: Array<string> = [];
+  let others = 2;
   return Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     const listed = yield* server.callTool({ name: "device_list", arguments: {} });
     expect(listed.structuredContent).toMatchObject({
       devices: [],
-      virtualMachines: { enabled: true, machines: vmState.machines, open: ["native-tile"] },
+      virtualMachines: {
+        enabled: true,
+        machines: vmState.machines,
+        open: ["native-tile"],
+        guests: { "native-tile": guest },
+        openInOtherThreads: { "native-tile": 2 },
+        host: hostInventory,
+      },
     });
     const opened = yield* server.callTool({
       name: "device_open",
       arguments: { virtualMachine: "native-tile" },
     });
-    expect(opened.structuredContent).toMatchObject({ virtualMachine: "native-tile" });
+    expect(opened.structuredContent).toMatchObject({
+      virtualMachine: "native-tile",
+      guest,
+      otherThreads: 2,
+    });
+    const quickStart = (opened.structuredContent as { quickStart: string }).quickStart;
+    // The agent has to learn before planning that this guest cannot build an Xcode project.
+    expect(quickStart).toContain("macOS 26.5.2");
+    expect(quickStart).toContain("No Xcode is installed");
+    expect(quickStart).toContain("2 other threads have this VM open");
+    // Suspending would end the two other threads' sessions, so the agent may only close its own.
+    const refused = yield* server.callTool({
+      name: "device_close",
+      arguments: { virtualMachine: "native-tile", shutdown: true },
+    });
+    expect(refused.isError).toBe(true);
+    expect(JSON.stringify(refused.content)).toContain("2 other threads have this VM open");
+    others = 0;
     yield* server.callTool({
       name: "device_close",
       arguments: { virtualMachine: "native-tile", shutdown: true },
@@ -263,7 +318,18 @@ it.effect("lists, opens, and closes VMs through the device tools", () => {
       layerWithVirtualMachines(
         mockVirtualMachines({
           state: Effect.succeed(vmState),
-          list: Effect.succeed(vmState),
+          list: Effect.succeed({
+            ...vmState,
+            sessions: [
+              ...vmState.sessions,
+              { name: "native-tile", threadId: ThreadId.make("parent") },
+              { name: "native-tile", threadId: ThreadId.make("sibling") },
+            ],
+          }),
+          knownGuests: Effect.succeed({ "native-tile": guest }),
+          hostInventory: Effect.succeed(hostInventory),
+          inspect: () => Effect.succeed(guest),
+          otherSessions: () => Effect.sync(() => others),
           open: (input) =>
             Effect.sync(() => {
               calls.push(`open ${input.name} ${input.threadId}`);
@@ -279,6 +345,8 @@ it.effect("lists, opens, and closes VMs through the device tools", () => {
 
 it.effect.each([
   ["vm_exec", { name: "native-tile", command: "id" }],
+  ["vm_job", { name: "native-tile", jobId: "0123456789ab" }],
+  ["vm_download", { name: "native-tile", guestPath: "/tmp/a.log", relativePath: "a.log" }],
   ["vm_control", { name: "native-tile", tool: "click", arguments: {} }],
   ["vm_delete", { name: "native-tile" }],
   ["vm_create", { name: "native-tile", cpu: 4, memoryGb: 8 }],
@@ -329,6 +397,15 @@ it.effect.each([
           remove: () => called,
           upload: () => called,
           exec: () => called.pipe(Effect.as({ stdout: "", stderr: "", exitCode: 0 })),
+          job: () =>
+            called.pipe(
+              Effect.as({ state: "running" as const, exitCode: null, output: "", logPath: "/l" }),
+            ),
+          download: () => called.pipe(Effect.as({ bytes: 1 })),
+          knownGuests: Effect.succeed({}),
+          hostInventory: Effect.succeed(hostInventory),
+          inspect: () => Effect.succeed(null),
+          otherSessions: () => Effect.succeed(0),
           tools: () => called.pipe(Effect.as([])),
           control: () => called.pipe(Effect.as(decodeGuestResult({ content: [], isError: false }))),
           open: () =>
