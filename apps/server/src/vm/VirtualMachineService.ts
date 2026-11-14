@@ -29,6 +29,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import type * as Duration from "effect/Duration";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
@@ -140,6 +141,44 @@ export const VM_VIEWER_PREFIX = "/api/vm-viewer";
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const jobDirectory = (id: string) => `"$HOME/.t3-vm-jobs/${id}"`;
 
+export const startJobScript = (jobId: string, command: string, cwd: string | undefined) => {
+  const directory = jobDirectory(jobId);
+  // The command goes through a file, so the guest shell never re-parses its quoting.
+  // HUP is ignored because the exec that starts the job ends at once. The exit code
+  // is renamed into place so a reader never sees a half-written file.
+  return [
+    `d=${directory}; mkdir -p "$d" || exit 1`,
+    `printf '%s\\n' ${shellQuote(command)} > "$d/command"`,
+    `( trap '' HUP; { ${cwd ? `cd ${shellQuote(cwd)} && ` : ""}sh "$d/command"; } > "$d/log" 2>&1 < /dev/null; echo $? > "$d/exit.tmp"; mv "$d/exit.tmp" "$d/exit" ) > /dev/null 2>&1 &`,
+    `echo $! > "$d/pid"; echo "$d/log"`,
+  ].join("\n");
+};
+
+export const readJobScript = (jobId: string, tailBytes: number, stop: boolean) =>
+  [
+    `d=${jobDirectory(jobId)}; [ -d "$d" ] || { echo "T3JOB missing"; exit 0; }`,
+    `p=$(cat "$d/pid" 2>/dev/null); t=`,
+    // Every process the stop signalled; the job counts as running while one survives.
+    `alive() { for q in $t; do kill -0 "$q" 2>/dev/null && return 0; done; return 1; }`,
+    // Stopping ends the command's whole process tree, deepest first, and leaves the
+    // wrapper alive to record the exit code. The tree is listed before signalling, since a
+    // child that ignores TERM outlives its parent and is no longer under the wrapper. The
+    // wrapper's exit code is not proof: it records one as soon as its own child ends.
+    ...(stop
+      ? [
+          `tree() { for c in $(pgrep -P "$1"); do tree "$c"; done; echo "$1"; }`,
+          `jobtree() { for c in $(pgrep -P "$p"); do tree "$c"; done; }`,
+          `settle() { i=0; while { alive || [ ! -f "$d/exit" ]; } && [ $i -lt 10 ]; do sleep 0.5; i=$((i+1)); done; }`,
+          `if [ ! -f "$d/exit" ] && [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then`,
+          `  t=$(jobtree); [ -n "$t" ] && kill -TERM $t 2>/dev/null; settle`,
+          `  if alive || [ ! -f "$d/exit" ]; then t="$t $(jobtree)"; for q in $t; do kill -0 "$q" 2>/dev/null && kill -KILL "$q" 2>/dev/null; done; settle; fi`,
+          `fi`,
+        ]
+      : []),
+    `if alive; then echo "T3JOB running"; elif [ -f "$d/exit" ]; then echo "T3JOB exited $(cat "$d/exit")"; elif [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then echo "T3JOB running"; else echo "T3JOB lost"; fi`,
+    `echo "$d/log"; tail -c ${tailBytes} "$d/log" 2>/dev/null`,
+  ].join("\n");
+
 /** One guest command that reports what the guest can build and whether sudo needs a password. */
 const GUEST_PROBE = [
   'echo "macos=$(sw_vers -productVersion)"',
@@ -196,7 +235,15 @@ export class VirtualMachineService extends Context.Service<
       input: VirtualMachineOpenInput,
     ) => Effect.Effect<VirtualMachineViewer, VirtualMachineError>;
     readonly close: (input: VirtualMachineOpenInput) => Effect.Effect<void>;
-    readonly stop: (name: string) => Effect.Effect<void, VirtualMachineError>;
+    /**
+     * Suspends the VM. With `forThread`, the suspend is that thread's and is refused while
+     * another thread holds the VM. The check runs under the suspend's exclusive lock, so an
+     * open still waiting for its viewer counts.
+     */
+    readonly stop: (
+      name: string,
+      options?: { readonly forThread?: ThreadId },
+    ) => Effect.Effect<void, VirtualMachineError>;
     readonly remove: (name: string) => Effect.Effect<void, VirtualMachineError>;
     readonly dismiss: (name: string) => Effect.Effect<void, VirtualMachineError>;
     readonly exec: (
@@ -1033,33 +1080,6 @@ const make = Effect.gen(function* () {
       }),
     );
   });
-  const startJobScript = (jobId: string, command: string, cwd: string | undefined) => {
-    const directory = jobDirectory(jobId);
-    // The command goes through a file, so the guest shell never re-parses its quoting.
-    // HUP is ignored because the exec that starts the job ends at once. The exit code
-    // is renamed into place so a reader never sees a half-written file.
-    return [
-      `d=${directory}; mkdir -p "$d" || exit 1`,
-      `printf '%s\\n' ${shellQuote(command)} > "$d/command"`,
-      `( trap '' HUP; { ${cwd ? `cd ${shellQuote(cwd)} && ` : ""}sh "$d/command"; } > "$d/log" 2>&1 < /dev/null; echo $? > "$d/exit.tmp"; mv "$d/exit.tmp" "$d/exit" ) > /dev/null 2>&1 &`,
-      `echo $! > "$d/pid"; echo "$d/log"`,
-    ].join("\n");
-  };
-  const readJobScript = (jobId: string, tailBytes: number, stop: boolean) =>
-    [
-      `d=${jobDirectory(jobId)}; [ -d "$d" ] || { echo "T3JOB missing"; exit 0; }`,
-      `p=$(cat "$d/pid" 2>/dev/null)`,
-      // Stopping ends the command's whole process tree, deepest first, and leaves the
-      // wrapper alive to record the exit code.
-      ...(stop
-        ? [
-            `tree() { for c in $(pgrep -P "$1"); do tree "$c"; done; kill -TERM "$1" 2>/dev/null; }`,
-            `if [ ! -f "$d/exit" ] && [ -n "$p" ]; then for c in $(pgrep -P "$p"); do tree "$c"; done; i=0; while [ ! -f "$d/exit" ] && [ $i -lt 10 ]; do sleep 0.5; i=$((i+1)); done; [ -f "$d/exit" ] || echo 143 > "$d/exit"; fi`,
-          ]
-        : []),
-      `if [ -f "$d/exit" ]; then echo "T3JOB exited $(cat "$d/exit")"; elif [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then echo "T3JOB running"; else echo "T3JOB lost"; fi`,
-      `echo "$d/log"; tail -c ${tailBytes} "$d/log" 2>/dev/null`,
-    ].join("\n");
   const guestShell = Effect.fn("VirtualMachineService.guestShell")(function* (
     name: string,
     command: string,
@@ -1115,6 +1135,10 @@ const make = Effect.gen(function* () {
       path.isAbsolute(relative)
     )
       return yield* outside;
+    // Replacing a regular file is allowed; a symlink already there could point anywhere.
+    // This runs before the stat, which follows a dangling link and reports it missing.
+    if (target === "new-file" && Option.isSome(yield* fs.readLink(resolved).pipe(Effect.option)))
+      return yield* outside;
     const stat = yield* fs.stat(resolved).pipe(
       Effect.map((info) => info.type),
       Effect.catch((cause) =>
@@ -1123,13 +1147,17 @@ const make = Effect.gen(function* () {
           : Effect.fail(storage(cause)),
       ),
     );
-    // Replacing a regular file is allowed; a symlink already there could point anywhere.
-    if (target === "new-file" && stat !== "Missing") {
-      const link = yield* fs.readLink(resolved).pipe(Effect.option);
-      if (link._tag === "Some" || stat !== "File") return yield* outside;
-    }
-    if (target === "existing-file" && stat !== "File") return yield* outside;
+    if (stat !== "File" && (target === "existing-file" || stat !== "Missing"))
+      return yield* outside;
     return resolved;
+  });
+  const otherSessions = Effect.fn("VirtualMachineService.otherSessions")(function* (
+    threadId: ThreadId,
+    name: string,
+  ) {
+    return (yield* Ref.get(state)).sessions.filter(
+      (session) => session.name === name && session.threadId !== threadId,
+    ).length;
   });
   return VirtualMachineService.of({
     state: Ref.get(state),
@@ -1150,8 +1178,22 @@ const make = Effect.gen(function* () {
         threadId: input.threadId,
       });
     }),
-    stop: Effect.fnUntraced(function* (name) {
-      yield* withMachine(name, changePower(name, false), { exclusive: true });
+    stop: Effect.fnUntraced(function* (name, options) {
+      const forThread = options?.forThread;
+      yield* withMachine(
+        name,
+        Effect.gen(function* () {
+          const otherThreads = forThread === undefined ? 0 : yield* otherSessions(forThread, name);
+          if (otherThreads > 0)
+            return yield* new VirtualMachineError({
+              operation: "stop",
+              reason: "shared",
+              otherThreads,
+            });
+          yield* changePower(name, false);
+        }),
+        { exclusive: true },
+      );
     }),
     remove: Effect.fnUntraced(function* (name) {
       yield* withMachine(name, changePower(name, true), { exclusive: true });
@@ -1235,11 +1277,7 @@ const make = Effect.gen(function* () {
     ),
     knownGuests: Effect.sync(() => Object.fromEntries(guests)),
     hostInventory: hostInventory(),
-    otherSessions: Effect.fn("VirtualMachineService.otherSessions")(function* (threadId, name) {
-      return (yield* Ref.get(state)).sessions.filter(
-        (session) => session.name === name && session.threadId !== threadId,
-      ).length;
-    }),
+    otherSessions,
     control: Effect.fn("VirtualMachineService.control")(
       function* (threadId, input) {
         yield* requireOpen(threadId, input.name);

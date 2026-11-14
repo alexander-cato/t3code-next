@@ -1,3 +1,5 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- a background job must outlive the call that starts it.
+import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
@@ -1604,6 +1606,44 @@ it.effect("a closed or reopened session reports its own reason, not another thre
   ),
 );
 
+it.effect("an agent's suspend counts a thread whose open is still waiting for its viewer", () =>
+  provide(
+    Effect.gen(function* () {
+      const starting = yield* Deferred.make<void>();
+      const finish = yield* Deferred.make<void>();
+      const viewer = output(
+        json({ url: "http://192.168.64.2:3211/viewer/#ticket=t", expires_at_unix: 9999999999 }),
+      );
+      const { vms, calls } = yield* fixture({
+        view: (count) =>
+          count === 1
+            ? Deferred.succeed(starting, undefined).pipe(
+                Effect.andThen(Deferred.await(finish)),
+                Effect.as(viewer),
+              )
+            : Effect.succeed(viewer),
+      });
+      const suspended = () => calls.some((call) => call.args.includes("suspend"));
+      const opening = yield* vms
+        .open({ name: "native-tile", threadId: otherThread })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(starting);
+      // The other thread has no session yet, so only a check under the lock sees it.
+      expect(yield* vms.otherSessions(threadId, "native-tile")).toBe(0);
+      const stopping = yield* vms
+        .stop("native-tile", { forThread: threadId })
+        .pipe(Effect.flip, Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.succeed(finish, undefined);
+      yield* Fiber.join(opening);
+      expect(yield* Fiber.join(stopping)).toMatchObject({ reason: "shared", otherThreads: 1 });
+      expect(suspended()).toBe(false);
+      // The panel's suspend is the user's and still ends every thread's session.
+      yield* vms.stop("native-tile");
+      expect(suspended()).toBe(true);
+    }),
+  ),
+);
+
 it.effect("runs a background job from a file and reads its state without a long-lived call", () =>
   provide(
     Effect.gen(function* () {
@@ -1684,6 +1724,55 @@ it.effect("runs a background job from a file and reads its state without a long-
   ),
 );
 
+// The guest is macOS; the scripts are POSIX sh, so a Linux or macOS host runs them as written.
+it.live.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+  "stopping a job ends a child that ignores TERM before reporting it exited",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const environment = yield* HostProcess.Environment;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "t3-vm-job-" });
+      let survivor: number | undefined;
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (survivor !== undefined) process.kill(survivor, "SIGKILL");
+        }).pipe(Effect.ignore),
+      );
+      // The stop's half-second waits shrink so the TERM grace period passes quickly.
+      const bin = path.join(home, "bin");
+      yield* fs.makeDirectory(bin);
+      yield* fs.writeFileString(path.join(bin, "sleep"), "#!/bin/sh\nexec /bin/sleep 0.05\n");
+      yield* fs.chmod(path.join(bin, "sleep"), 0o755);
+      // Synchronous, so no process supervisor ends the backgrounded job with its starter.
+      const sh = (script: string, PATH = environment.PATH) =>
+        Effect.sync(() =>
+          NodeChildProcess.execFileSync("sh", ["-c", script], {
+            env: { ...environment, HOME: home, PATH },
+            encoding: "utf8",
+          }),
+        );
+      const ready = path.join(home, "ready");
+      yield* sh(`mkfifo "${ready}"`);
+      // The job's shell dies on TERM, so its wrapper records 143 while the child lives on.
+      yield* sh(
+        VirtualMachineService.startJobScript(
+          "job",
+          `sh -c 'trap "" TERM; echo $$ > "$HOME/ready"; exec /bin/sleep 30' & wait`,
+          undefined,
+        ),
+      );
+      survivor = Number(yield* fs.readFileString(ready));
+      const stopped = yield* sh(
+        VirtualMachineService.readJobScript("job", 0, true),
+        `${bin}:${environment.PATH}`,
+      );
+      expect(stopped.split("\n")[0]).toBe("T3JOB exited 143");
+      expect(() => process.kill(survivor!, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+      survivor = undefined;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
 it.effect("downloads a guest file into the workspace and refuses targets outside it", () =>
   provide(
     Effect.gen(function* () {
@@ -1696,6 +1785,8 @@ it.effect("downloads a guest file into the workspace and refuses targets outside
       yield* fs.writeFileString(path.join(outside, "secret.txt"), "host file");
       yield* fs.symlink(outside, path.join(workspace, "escape"));
       yield* fs.symlink(path.join(outside, "secret.txt"), path.join(workspace, "link.txt"));
+      // Its stat follows the link and reports a missing file, which a new file may replace.
+      yield* fs.symlink(path.join(outside, "planted.txt"), path.join(workspace, "dangling.txt"));
       const shell = { worktreePath: workspace } as OrchestrationV2ThreadShell;
       const layer = Layer.mergeAll(
         Layer.mock(ThreadManagementService.ThreadManagementService)({
@@ -1713,6 +1804,7 @@ it.effect("downloads a guest file into the workspace and refuses targets outside
         path.join(outside, "new.txt"),
         "escape/new.txt",
         "link.txt",
+        "dangling.txt",
         "results",
         ".",
       ]) {
@@ -1721,6 +1813,7 @@ it.effect("downloads a guest file into the workspace and refuses targets outside
       expect((yield* download("missing/tests.xml").pipe(Effect.flip)).reason).toBe("storage");
       expect(calls.some((call) => call.args.includes("cp"))).toBe(false);
       expect(yield* fs.readFileString(path.join(outside, "secret.txt"))).toBe("host file");
+      expect(yield* fs.exists(path.join(outside, "planted.txt"))).toBe(false);
 
       const target = path.join(yield* fs.realPath(workspace), "results", "tests.xml");
       expect(yield* download("results/tests.xml")).toEqual({ bytes: 10 });

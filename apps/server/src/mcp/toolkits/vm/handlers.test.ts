@@ -306,9 +306,11 @@ it.effect("lists, opens, and closes VMs through the device tools", () => {
       arguments: { virtualMachine: "native-tile", shutdown: true },
     });
     yield* server.callTool({ name: "device_close", arguments: {} });
+    // The service checks the other threads under the suspend's lock, so the tool names its thread.
     expect(calls).toEqual([
       `open native-tile ${threadId}`,
-      "stop native-tile",
+      `stop native-tile for ${threadId}`,
+      `stop native-tile for ${threadId}`,
       "close native-tile",
     ]);
   }).pipe(
@@ -335,7 +337,16 @@ it.effect("lists, opens, and closes VMs through the device tools", () => {
               calls.push(`open ${input.name} ${input.threadId}`);
               return { name: input.name, viewerPath: "/viewer", expiresInMs: 60_000 };
             }),
-          stop: (name) => Effect.sync(() => void calls.push(`stop ${name}`)),
+          stop: (name, options) =>
+            Effect.gen(function* () {
+              calls.push(`stop ${name} for ${options?.forThread}`);
+              if (options?.forThread !== undefined && others > 0)
+                return yield* new VirtualMachineError({
+                  operation: "stop",
+                  reason: "shared",
+                  otherThreads: others,
+                });
+            }),
           close: (input) => Effect.sync(() => void calls.push(`close ${input.name}`)),
         }),
       ),

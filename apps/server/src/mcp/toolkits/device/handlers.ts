@@ -495,14 +495,7 @@ const handlers = {
         name: string,
       ) {
         if (!input.shutdown) return yield* vms.close({ name, threadId });
-        const otherThreads = yield* vms.otherSessions(threadId, name);
-        if (otherThreads > 0)
-          return yield* new VirtualMachineError({
-            operation: "stop",
-            reason: "shared",
-            otherThreads,
-          });
-        yield* vms.stop(name);
+        yield* vms.stop(name, { forThread: threadId });
       });
       if (input.virtualMachine !== undefined) {
         yield* closeVirtualMachine(input.virtualMachine);
