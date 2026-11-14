@@ -43,7 +43,15 @@ function pushMirror({ sha, expectedSha, token }) {
           NIGHTLY_PUSH_TOKEN: token,
         },
       }).trim();
-    git("fetch", "--no-tags", "--filter=blob:none", "https://github.com/pingdotgg/t3code.git", sha);
+    // The fork's partial-clone remote cannot supply newly published upstream objects.
+    git(
+      "fetch",
+      "--no-tags",
+      "--refetch",
+      "--no-filter",
+      "https://github.com/pingdotgg/t3code.git",
+      sha,
+    );
     if (git("rev-parse", "FETCH_HEAD") !== sha)
       throw new Error("Upstream fetch returned an unexpected SHA.");
     git(
@@ -214,4 +222,4 @@ async function syncUpstreamNightly({
   return { changed: true, sha, candidate, pull: pull.html_url, review };
 }
 
-module.exports = { selectNightly, syncUpstreamNightly };
+module.exports = { selectNightly, syncUpstreamNightly, pushMirror };

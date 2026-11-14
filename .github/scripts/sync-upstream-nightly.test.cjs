@@ -1,5 +1,10 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
+const childProcess = require("node:child_process");
+const { mkdtempSync, writeFileSync, rmSync } = require("node:fs");
+const { tmpdir } = require("node:os");
+const { join } = require("node:path");
+const { pathToFileURL } = require("node:url");
 const { selectNightly, syncUpstreamNightly } = require("./sync-upstream-nightly.cjs");
 const MAIN = "a".repeat(40),
   UPSTREAM = "b".repeat(40),
@@ -169,4 +174,80 @@ test("does not propose or dispatch an unverified, conflicted, or raced candidate
       false,
     );
   }
+});
+
+test("mirrors divergent upstream blobs from a partial fork checkout", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "t3-nightly-mirror-test-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const upstream = join(directory, "upstream");
+  const forkSource = join(directory, "fork");
+  const fork = join(directory, "fork.git");
+  const checkout = join(directory, "checkout");
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  const execFileSync = childProcess.execFileSync;
+  const git = (cwd, ...args) =>
+    execFileSync("git", args, { cwd, env, encoding: "utf8", stdio: "pipe" }).trim();
+  git(directory, "init", "--initial-branch=main", upstream);
+  git(upstream, "config", "user.name", "Nightly test");
+  git(upstream, "config", "user.email", "nightly@example.invalid");
+  git(upstream, "config", "uploadpack.allowFilter", "true");
+  writeFileSync(join(upstream, "base.txt"), "Existing fork content\n");
+  git(upstream, "add", ".");
+  git(upstream, "commit", "-m", "Base");
+  const base = git(upstream, "rev-parse", "HEAD");
+  git(directory, "clone", upstream, forkSource);
+  git(forkSource, "config", "user.name", "Nightly test");
+  git(forkSource, "config", "user.email", "nightly@example.invalid");
+  writeFileSync(join(forkSource, "base.txt"), "Fork-only content\n");
+  git(forkSource, "commit", "-am", "Fork changes");
+  const forkMain = git(forkSource, "rev-parse", "HEAD");
+  git(directory, "clone", "--bare", forkSource, fork);
+  git(fork, "config", "uploadpack.allowFilter", "true");
+  git(fork, "update-ref", "refs/heads/upstream/nightly", base);
+  writeFileSync(join(upstream, "base.txt"), "New upstream content absent from the fork\n");
+  git(upstream, "add", ".");
+  git(upstream, "commit", "-m", "Nightly");
+  const sha = git(upstream, "rev-parse", "HEAD");
+  git(
+    directory,
+    "clone",
+    "--filter=blob:none",
+    "--no-checkout",
+    "--depth=1",
+    pathToFileURL(fork).href,
+    checkout,
+  );
+
+  const modulePath = require.resolve("./sync-upstream-nightly.cjs");
+  const cachedModule = require.cache[modulePath];
+  t.after(() => {
+    require.cache[modulePath] = cachedModule;
+  });
+  delete require.cache[modulePath];
+  t.mock.method(childProcess, "execFileSync", (command, args, options) => {
+    return execFileSync(
+      command,
+      args.map((argument) => {
+        if (argument === "https://github.com/pingdotgg/t3code.git")
+          return pathToFileURL(upstream).href;
+        if (argument === "https://github.com/alexander-cato/t3code-next.git")
+          return pathToFileURL(fork).href;
+        return argument;
+      }),
+      {
+        ...options,
+        cwd: checkout,
+        env: { ...options.env, ...env },
+      },
+    );
+  });
+  const { pushMirror } = require(modulePath);
+  pushMirror({ sha, expectedSha: base, token: "fixture-token" });
+  assert.equal(git(fork, "rev-parse", "refs/heads/upstream/nightly"), sha);
+  assert.equal(
+    git(fork, "show", "upstream/nightly:base.txt"),
+    "New upstream content absent from the fork",
+  );
+  assert.equal(git(fork, "rev-parse", "main"), forkMain);
+  assert.equal(git(fork, "show", "main:base.txt"), "Fork-only content");
 });
