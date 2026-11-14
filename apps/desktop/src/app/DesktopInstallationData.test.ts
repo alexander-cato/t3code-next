@@ -111,6 +111,22 @@ it.effect(
       const ownedSkill = f.path.join("providers", "antigravity", "owned", "config", "skills");
       yield* f.fs.makeDirectory(f.path.join(f.source, ownedSkill), { recursive: true });
       yield* f.fs.writeFileString(f.path.join(f.source, ownedSkill, "SKILL.md"), "owned skill");
+      const shadow = f.path.join("providers", "codex", "work-account", "shadow");
+      const sharedHome = f.path.join(f.home, ".codex");
+      yield* f.fs.makeDirectory(sharedHome, { recursive: true });
+      yield* f.fs.makeDirectory(f.path.join(f.source, shadow), { recursive: true });
+      const sharedEntries = ["sessions", "skills", "config.toml", "state_5.sqlite"];
+      for (const entry of sharedEntries) {
+        const shared = f.path.join(sharedHome, entry);
+        yield* f.fs.writeFileString(shared, `shared ${entry}`);
+        yield* f.fs.symlink(shared, f.path.join(f.source, shadow, entry));
+      }
+      yield* f.fs.writeFileString(f.path.join(f.source, shadow, "auth.json"), "private auth");
+      yield* f.fs.makeDirectory(f.path.join(f.source, shadow, "memories"));
+      yield* f.fs.writeFileString(
+        f.path.join(f.source, shadow, "memories", "owned.txt"),
+        "private memory",
+      );
       f.database.exec(`
         INSERT INTO orchestration_v2_projection_runs VALUES
           ('failed', 'old-run', 'history', '2026-11-01T00:00:00Z', 1, '{}'),
@@ -210,6 +226,22 @@ it.effect(
         yield* f.fs.readFileString(f.path.join(f.target, ownedSkill, "SKILL.md")),
         "owned skill",
       );
+      for (const entry of sharedEntries) {
+        assert.isFalse(yield* f.fs.exists(f.path.join(f.target, shadow, entry)));
+        assert.equal(yield* f.fs.readFileString(f.path.join(sharedHome, entry)), `shared ${entry}`);
+        assert.equal(
+          yield* f.fs.readLink(f.path.join(f.source, shadow, entry)),
+          f.path.join(sharedHome, entry),
+        );
+      }
+      assert.equal(
+        yield* f.fs.readFileString(f.path.join(f.target, shadow, "auth.json")),
+        "private auth",
+      );
+      assert.equal(
+        yield* f.fs.readFileString(f.path.join(f.target, shadow, "memories", "owned.txt")),
+        "private memory",
+      );
       const imported = yield* f.data.getState;
       assert.lengthOf(imported.backups, 1);
       yield* f.data.restore(imported.backups[0]!.id);
@@ -294,6 +326,27 @@ it.effect(
       if (unsafe._tag === "DesktopInstallationDataUnavailable")
         assert.equal(unsafe.reason, "unsafe-path");
       else assert.fail("Import should reject external links");
+      yield* f.fs.remove(f.path.join(f.source, "outside-link"));
+      const sharedHome = f.path.join(f.home, ".codex");
+      yield* f.fs.makeDirectory(sharedHome, { recursive: true });
+      for (const [relative, target] of [
+        ["shadow/auth.json", f.path.join(sharedHome, "auth.json")],
+        ["shadow/memories", f.path.join(sharedHome, "memories")],
+        ["shadow/config.toml", external],
+        ["custom-shadow/config.toml", f.path.join(sharedHome, "config.toml")],
+        ["shadow/owned/nested-link", external],
+      ] as const) {
+        const link = f.path.join(f.source, "providers", "codex", "work-account", relative);
+        yield* f.fs.writeFileString(target, "not portable");
+        yield* f.fs.makeDirectory(f.path.dirname(link), { recursive: true });
+        yield* f.fs.symlink(target, link);
+        const rejected = yield* Effect.flip(f.data.prepare(f.source));
+        if (rejected._tag === "DesktopInstallationDataUnavailable")
+          assert.equal(rejected.reason, "unsafe-path");
+        else assert.fail("Import should reject non-regenerable Codex links");
+        yield* f.fs.remove(link);
+      }
+
       assert.equal(
         yield* f.fs.readFileString(f.path.join(f.target, "previous.txt")),
         "fork data before import",

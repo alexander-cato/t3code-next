@@ -661,6 +661,7 @@ function ManagedCodexSetup({
             flowId: auth.flowId,
           },
           import.meta.env.DEV,
+          import.meta.env.T3CODE_DESKTOP_FORK,
         )
       : null;
   const waitingControl = (

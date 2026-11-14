@@ -331,19 +331,37 @@ export const make = Effect.gen(function* () {
     ancestors: ReadonlySet<string> = new Set(),
   ): Effect.fn.Return<void, PlatformError.PlatformError | DesktopInstallationDataUnavailable> {
     const relative = path.relative(root, source).split(path.sep);
-    // Antigravity recreates links to native skill directories when preparing its profile.
-    if (
+    const antigravitySkills =
       relative.length === 5 &&
       relative[0] === "providers" &&
       relative[1] === "antigravity" &&
       (relative[3] === "config" || relative[3] === "antigravity-cli") &&
-      relative[4] === "skills" &&
-      (yield* fs.readLink(source).pipe(
-        Effect.as(true),
-        Effect.orElseSucceed(() => false),
-      ))
-    )
-      return;
+      relative[4] === "skills";
+    const codexSharedEntry =
+      relative.length === 5 &&
+      relative[0] === "providers" &&
+      relative[1] === "codex" &&
+      relative[3] === "shadow" &&
+      ![
+        "auth.json",
+        "auth.lock",
+        "models_cache.json",
+        "log",
+        "memories",
+        "tmp",
+        ".DS_Store",
+      ].includes(relative[4]!);
+    // Provider preparation recreates these links; private auth and owned files remain portable.
+    if (antigravitySkills || codexSharedEntry) {
+      const link = yield* fs.readLink(source).pipe(Effect.orElseSucceed(() => null));
+      if (
+        link !== null &&
+        (antigravitySkills ||
+          path.resolve(path.dirname(source), link) ===
+            path.join(environment.homeDirectory, ".codex", relative[4]!))
+      )
+        return;
+    }
     const real = yield* fs.realPath(source);
     if ((real !== root && !real.startsWith(root + path.sep)) || ancestors.has(real))
       return yield* new DesktopInstallationDataUnavailable({ reason: "unsafe-path" });
