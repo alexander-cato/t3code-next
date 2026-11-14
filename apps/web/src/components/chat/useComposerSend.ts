@@ -14,6 +14,7 @@ import {
   snapshotComposerSend,
   withMessageContext,
   makeThreadErrorSetter,
+  cloneComposerImageForRetry,
 } from "../ChatView.logic";
 import { isUsageLimitsCommand } from "@t3tools/shared/usageLimits";
 import {
@@ -25,6 +26,7 @@ import {
   type ScopedThreadRef,
   type ThreadId,
   ProviderInteractionMode,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   RuntimeMode,
 } from "@t3tools/contracts";
 import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
@@ -1413,25 +1415,81 @@ export function useComposerSend(input: ComposerSendInput) {
           useComposerDraftStore.getState().getComposerDraft(composerDraftTarget),
         )
       ) {
-        // A draft typed meanwhile keeps the composer, so the failed text stays reachable here.
         const failedText = sendSnapshot.draftText;
-        if (failedText.trim().length > 0) {
-          toastManager.add(
+        const hasAttachments = sendSnapshot.attachments.length > 0;
+        const copyMessage =
+          failedText.trim().length > 0
+            ? {
+                children: "Copy message",
+                onClick: () => {
+                  void writeTextToClipboard(failedText, "failed message").catch(() => undefined);
+                },
+              }
+            : undefined;
+        if (copyMessage || hasAttachments) {
+          const failureToastId = toastManager.add(
             stackedThreadToast({
               type: "error",
               title: isAtomCommandInterrupted(failure)
                 ? "Message may not have been sent"
                 : "Message not sent",
-              description: "Your new draft was kept. Copy the failed message to send it again.",
-              // The toast holds the only copy of the failed text, so it stays until dismissed.
+              description: hasAttachments
+                ? "Your new draft was kept. Restore the failed attachments to send them again."
+                : "Your new draft was kept. Copy the failed message to send it again.",
+              // The toast owns the failed snapshot until it is recovered or dismissed.
               timeout: 0,
-              data: { hideCopyButton: true },
-              actionProps: {
-                children: "Copy message",
-                onClick: () => {
-                  void writeTextToClipboard(failedText, "failed message").catch(() => undefined);
-                },
+              data: {
+                hideCopyButton: true,
+                ...(hasAttachments && copyMessage ? { secondaryActionProps: copyMessage } : {}),
               },
+              ...(hasAttachments
+                ? {
+                    actionProps: {
+                      children: "Restore attachments",
+                      onClick: () => {
+                        const drafts = useComposerDraftStore.getState();
+                        const current = drafts.getComposerDraft(composerDraftTarget);
+                        const images = sendSnapshot.images.filter(
+                          (image) => !current?.images.some((existing) => existing.id === image.id),
+                        );
+                        const files = sendSnapshot.files.filter(
+                          (file) => !current?.files.some((existing) => existing.id === file.id),
+                        );
+                        if (
+                          (current?.images.length ?? 0) +
+                            (current?.files.length ?? 0) +
+                            images.length +
+                            files.length >
+                          PROVIDER_SEND_TURN_MAX_ATTACHMENTS
+                        ) {
+                          toastManager.update(failureToastId, {
+                            description:
+                              "Make room in your draft, then restore these attachments. They are still kept here.",
+                          });
+                          return;
+                        }
+                        drafts.addImages(
+                          composerDraftTarget,
+                          images.map(cloneComposerImageForRetry),
+                          { allowDuplicates: true },
+                        );
+                        drafts.addFiles(composerDraftTarget, files, { allowDuplicates: true });
+                        if (copyMessage) {
+                          toastManager.update(failureToastId, {
+                            description:
+                              "Attachments restored. Copy the failed message to send it again.",
+                            data: { hideCopyButton: true },
+                            actionProps: copyMessage,
+                          });
+                        } else {
+                          toastManager.close(failureToastId);
+                        }
+                      },
+                    },
+                  }
+                : copyMessage
+                  ? { actionProps: copyMessage }
+                  : {}),
             }),
           );
         }

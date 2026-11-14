@@ -1,6 +1,6 @@
 import { createMemoryHistory } from "@tanstack/react-router";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { RunId, ThreadId } from "@t3tools/contracts";
+import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS, RunId, ThreadId } from "@t3tools/contracts";
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 import type * as Context from "effect/Context";
 import { expect, it, vi } from "vite-plus/test";
@@ -16,6 +16,7 @@ import { __setClientSettingsForTests } from "~/hooks/useSettings";
 import { useRightPanelStore } from "~/rightPanelStore";
 import { getRouter } from "~/router";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { useAttachmentUploadStore } from "~/lib/attachmentUploadQueue";
 import { environmentThreadDetails } from "~/state/threads";
 import {
   ENVIRONMENT_ID,
@@ -198,41 +199,116 @@ it("a stashed prompt ending in a file chip restores with the chip", async () => 
   await expect.element(chip).toBeVisible();
 });
 
-it("a rejected send leaves the timeline when a new draft was typed meanwhile", async () => {
-  const thread = threadWithHistory("rejected-send", 1);
-  using _environment = installFakeEnvironment([thread], {
-    acceptCommands: true,
-    holdCommand: (command) => command.type === "message.dispatch",
-  });
-  __setClientSettingsForTests({
-    ...DEFAULT_CLIENT_SETTINGS,
-    onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
-  });
-  const router = getRouter(
-    createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${thread.id}`] }),
-  );
-  await router.load();
-  await using _app = await render(<AppRoot router={router} />, {
-    // AppRoot brings its own router.
-    router: false,
-  });
-  await expect.element(page.getByText(`Answer 0 for ${thread.id}.`)).toBeVisible();
+it.each(["Failed prompt", ""])(
+  "a rejected send preserves attachments alongside a newer draft (%s)",
+  async (prompt) => {
+    const thread = threadWithHistory(`rejected-send-${prompt.length}`, 1);
+    using _environment = installFakeEnvironment([thread], {
+      acceptCommands: true,
+      holdCommand: (command) => command.type === "message.dispatch",
+    });
+    __setClientSettingsForTests({
+      ...DEFAULT_CLIENT_SETTINGS,
+      onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const router = getRouter(
+      createMemoryHistory({ initialEntries: [`/${ENVIRONMENT_ID}/${thread.id}`] }),
+    );
+    await router.load();
+    await using _app = await render(<AppRoot router={router} />, {
+      // AppRoot brings its own router.
+      router: false,
+    });
+    await expect.element(page.getByText(`Answer 0 for ${thread.id}.`)).toBeVisible();
 
-  const editor = page.getByTestId("composer-editor");
-  await userEvent.click(editor);
-  await userEvent.keyboard("Failed prompt{Enter}");
-  await vi.waitFor(() =>
-    expect(dispatchedCommands().map((command) => command.type)).toContain("message.dispatch"),
-  );
-  await expect.element(page.getByText("Failed prompt")).toBeVisible();
-  await userEvent.keyboard("Next draft");
+    const threadRef = scopeThreadRef(ENVIRONMENT_ID, thread.id);
+    const drafts = useComposerDraftStore.getState();
+    const png = Uint8Array.from(
+      atob(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a05cAAAAASUVORK5CYII=",
+      ),
+      (character) => character.charCodeAt(0),
+    );
+    const file = new File([png, "failed image"], "sample.png", { type: "image/png" });
+    const previewUrl = URL.createObjectURL(file);
+    const image = {
+      id: `failed-image-${prompt.length}`,
+      type: "image" as const,
+      name: file.name,
+      mimeType: file.type,
+      sizeBytes: file.size,
+      file,
+      previewUrl,
+    };
+    const nextFile = new File([png, "newest image"], "sample.png", { type: "image/png" });
+    const nextImage = {
+      ...image,
+      id: `next-image-${prompt.length}`,
+      file: nextFile,
+      previewUrl: URL.createObjectURL(nextFile),
+    };
+    const previousUploads = useAttachmentUploadStore.getState();
+    using _uploads = { [Symbol.dispose]: () => useAttachmentUploadStore.setState(previousUploads) };
+    useAttachmentUploadStore.setState({
+      uploadsByImageId: {
+        [image.id]: { status: "ready", environmentId: ENVIRONMENT_ID, attachmentId: image.id },
+        [nextImage.id]: {
+          status: "ready",
+          environmentId: ENVIRONMENT_ID,
+          attachmentId: nextImage.id,
+        },
+      },
+    });
+    drafts.addImages(threadRef, [image]);
+    const editor = page.getByTestId("composer-editor");
+    await userEvent.click(editor);
+    await userEvent.keyboard(`${prompt}{Enter}`);
+    await vi.waitFor(() =>
+      expect(dispatchedCommands().map((command) => command.type)).toContain("message.dispatch"),
+    );
+    if (prompt) await expect.element(page.getByText(prompt)).toBeVisible();
+    await userEvent.keyboard("Next draft");
+    drafts.addImages(threadRef, [nextImage]);
 
-  await rejectPendingCommand("Attachment 'sample.png' cannot be sent.");
+    await rejectPendingCommand("Attachment 'sample.png' cannot be sent.");
 
-  await expect.element(page.getByText("Attachment 'sample.png' cannot be sent.")).toBeVisible();
-  await expect.element(page.getByText("Failed prompt")).not.toBeInTheDocument();
-  expect(editor.element().textContent).toContain("Next draft");
-});
+    await expect.element(page.getByText("Attachment 'sample.png' cannot be sent.")).toBeVisible();
+    if (prompt) await expect.element(page.getByText(prompt)).not.toBeInTheDocument();
+    expect(editor.element().textContent).toContain("Next draft");
+    if (prompt) {
+      const filler = Array.from({ length: PROVIDER_SEND_TURN_MAX_ATTACHMENTS - 1 }, (_, index) => ({
+        ...nextImage,
+        id: `filler-${index}`,
+        name: `filler-${index}.png`,
+        previewUrl: URL.createObjectURL(nextFile),
+      }));
+      drafts.addImages(threadRef, filler);
+      await userEvent.click(page.getByRole("button", { name: "Restore attachments" }));
+      await expect
+        .element(
+          page.getByText(
+            "Make room in your draft, then restore these attachments. They are still kept here.",
+          ),
+        )
+        .toBeVisible();
+      expect(drafts.getComposerDraft(threadRef)?.images).toHaveLength(
+        PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+      );
+      for (const image of filler) drafts.removeImage(threadRef, image.id);
+    }
+    await userEvent.click(page.getByRole("button", { name: "Restore attachments" }));
+    expect(editor.element().textContent).toContain("Next draft");
+    const restored = drafts.getComposerDraft(threadRef)?.images ?? [];
+    expect(restored.map((item) => item.id)).toEqual([nextImage.id, image.id]);
+    expect(restored[0]?.file).toBe(nextFile);
+    expect(restored[1]?.file).toBe(file);
+    expect(restored[1]?.previewUrl).not.toBe(previewUrl);
+    expect(await fetch(restored[1]!.previewUrl).then((response) => response.arrayBuffer())).toEqual(
+      await file.arrayBuffer(),
+    );
+    if (prompt) await expect.element(page.getByText("Copy message", { exact: true })).toBeVisible();
+  },
+);
 
 it("Enter on an empty prompt resumes an interrupted thread", async () => {
   const history = threadWithHistory("interrupted", 1);

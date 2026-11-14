@@ -5,9 +5,11 @@ import {
   AuthStandardClientScopes,
   connectDeviceVerificationCode,
 } from "@t3tools/contracts";
-import { expect, it } from "@effect/vitest";
+import { expect, it, vi } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 
@@ -15,6 +17,7 @@ import * as ServerConfig from "../config.ts";
 import { makeDpopKey } from "./dpop.testkit.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as AuthPairingLinks from "../persistence/AuthPairingLinks.ts";
 import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 
 import * as ServerSecretStore from "./ServerSecretStore.ts";
@@ -412,6 +415,63 @@ it.layer(Layer.mergeAll(NodeServices.layer, NodePlatformCrypto.layer))(
           expect(
             (yield* serverAuth.listPairingLinks()).some((link) => link.connectDeviceRequest),
           ).toBe(false);
+        }).pipe(Effect.provide(layerEnvironmentAuth())),
+    );
+
+    it.effect.each(["device", "other clients"])(
+      "does not approve a Connect request during revocation of %s",
+      (target) =>
+        Effect.gen(function* () {
+          const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+          const links = yield* AuthPairingLinks.AuthPairingLinkRepository;
+          const deviceKey = "Kq3vZ8sYbTn0eW1pLr5uXc7dHf9gJm2aQs4tVw6yBzE";
+          const admin = yield* serverAuth.issueSession({ label: "Owner" });
+          yield* serverAuth.issueConnectCredential({
+            proofKeyThumbprint: deviceKey,
+            requireApproval: true,
+          });
+          const [request] = (yield* serverAuth.listPairingLinks()).filter(
+            (link) => link.connectDeviceRequest !== undefined,
+          );
+          const revoking = yield* Deferred.make<void>();
+          const resume = yield* Deferred.make<void>();
+          const revokeLinks = links.revokeUnspentByProofKey;
+          using _revoke = vi
+            .spyOn(links, "revokeUnspentByProofKey")
+            .mockImplementation((input) =>
+              Deferred.succeed(revoking, undefined).pipe(
+                Effect.andThen(Deferred.await(resume)),
+                Effect.andThen(revokeLinks(input)),
+              ),
+            );
+          const revoked = yield* Effect.forkChild(
+            target === "device"
+              ? serverAuth.revokeConnectDevice(deviceKey)
+              : serverAuth.revokeOtherClientSessions(admin.sessionId),
+          );
+          yield* Deferred.await(revoking);
+          using readLink = vi.spyOn(links, "getActiveById");
+          const approved = yield* serverAuth
+            .approveConnectDevice(request!.id)
+            .pipe(Effect.forkChild({ startImmediately: true }));
+          expect(readLink).not.toHaveBeenCalled();
+          yield* Deferred.succeed(resume, undefined);
+          yield* Fiber.join(revoked);
+          expect(yield* Fiber.join(approved)).toBe(false);
+          expect(yield* serverAuth.listConnectDevices()).toEqual([]);
+          const next = yield* serverAuth.issueConnectCredential({
+            proofKeyThumbprint: deviceKey,
+            requireApproval: true,
+          });
+          const result = yield* serverAuth
+            .exchangeBootstrapCredentialForAccessToken(
+              next.credential,
+              undefined,
+              requestMetadata,
+              { proofKeyThumbprint: deviceKey },
+            )
+            .pipe(Effect.flip);
+          expect(result._tag).toBe("ServerAuthConnectApprovalPendingError");
         }).pipe(Effect.provide(layerEnvironmentAuth())),
     );
 

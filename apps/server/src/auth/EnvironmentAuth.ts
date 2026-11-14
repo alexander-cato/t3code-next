@@ -1032,7 +1032,7 @@ export const make = Effect.gen(function* () {
     );
   };
 
-  // T3 Connect credential issuance, DPoP exchanges and device revocation take turns. Two mints
+  // T3 Connect approvals, credential issuance, DPoP exchanges and device revocation take turns. Two mints
   // at once would open two requests with one code, and a revoke landing between an exchange
   // spending its credential and trusting the key would be undone by that exchange.
   const connectTrustLock = yield* Semaphore.make(1);
@@ -1232,6 +1232,7 @@ export const make = Effect.gen(function* () {
     pairingLinkId,
   ) =>
     bootstrapCredentials.approveConnectRequest(pairingLinkId).pipe(
+      connectTrustLock.withPermits(1),
       Effect.mapError((cause) => new ServerAuthConnectDevicesError({ cause })),
       Effect.withSpan("EnvironmentAuth.approveConnectDevice"),
     );
