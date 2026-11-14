@@ -44,11 +44,18 @@ jobs:
       previous_ref: ${{ steps.plan.outputs.previous_ref }}
       publish: ${{ github.event_name == 'workflow_run' || inputs.publish }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-          sparse-checkout: .github/scripts
+      - name: Check out pinned public source without credentials
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git -c credential.helper= clone --filter=blob:none --no-checkout --depth=1 https://github.com/alexander-cato/t3code-next.git .
+          git config --local credential.helper ""
+          git fetch --no-tags --filter=blob:none --depth=1 origin "$SOURCE_SHA"
+          git sparse-checkout set .github/scripts
+          git -c submodule.recurse=false checkout --detach "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
       - name: Pin verified main and choose the next cross-repository version
         id: plan
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
@@ -73,14 +80,18 @@ jobs:
       VERSION: ${{ needs.resolve.outputs.version }}
       SOURCE_SHA: ${{ needs.resolve.outputs.ref }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: ${{ needs.resolve.outputs.ref }}
-          persist-credentials: false
-          sparse-checkout: |
-            /*
-            !/.repos/
-          sparse-checkout-cone-mode: false
+      - name: Check out pinned public source without credentials
+        env:
+          SOURCE_SHA: ${{ needs.resolve.outputs.ref }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git -c credential.helper= clone --filter=blob:none --no-checkout --depth=1 https://github.com/alexander-cato/t3code-next.git .
+          git config --local credential.helper ""
+          git fetch --no-tags --filter=blob:none --depth=1 origin "$SOURCE_SHA"
+          git sparse-checkout set --no-cone '/*' '!/.repos/'
+          git -c submodule.recurse=false checkout --detach "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
       - name: Verify checkout and signing availability
         env:
           SIGNING_CONFIGURED: ${{ secrets.CSC_LINK != '' && secrets.CSC_KEY_PASSWORD != '' && secrets.APPLE_API_KEY != '' && secrets.APPLE_API_KEY_ID != '' && secrets.APPLE_API_ISSUER != '' && secrets.MACOS_PROVISIONING_PROFILE != '' && vars.APPLE_TEAM_ID == '5Y33T3HS8S' }}
@@ -166,11 +177,18 @@ jobs:
       TAG: ${{ needs.resolve.outputs.tag }}
       PREVIOUS_REF: ${{ needs.resolve.outputs.previous_ref }}
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: ${{ needs.resolve.outputs.ref }}
-          persist-credentials: false
-          sparse-checkout: .github/scripts
+      - name: Check out pinned public source without credentials
+        env:
+          SOURCE_SHA: ${{ needs.resolve.outputs.ref }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          set -euo pipefail
+          git -c credential.helper= clone --filter=blob:none --no-checkout --depth=1 https://github.com/alexander-cato/t3code-next.git .
+          git config --local credential.helper ""
+          git fetch --no-tags --filter=blob:none --depth=1 origin "$SOURCE_SHA"
+          git sparse-checkout set .github/scripts
+          git -c submodule.recurse=false checkout --detach "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: fork-desktop-mac-arm64
