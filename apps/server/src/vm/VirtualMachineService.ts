@@ -24,6 +24,7 @@ import { isCommandAvailable, resolveCommandPath } from "@t3tools/shared/shell";
 import * as Clock from "effect/Clock";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -100,6 +101,7 @@ const isRevivedSession = Schema.is(Schema.Struct({ revived: Schema.Literal(true)
 const GuestRpcs = RpcGroup.make(McpSchema.Initialize, McpSchema.CallTool, McpSchema.ListTools);
 const Configuration = Schema.Struct({ enabled: Schema.Boolean });
 const encodeConfiguration = Schema.encodeEffect(Schema.fromJsonString(Configuration));
+const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 const commandFailure = (output: string): NonNullable<VirtualMachineError["failure"]> => {
   const text = NodeUtil.stripVTControlCharacters(output.slice(-64_000));
@@ -137,6 +139,34 @@ const commandFailure = (output: string): NonNullable<VirtualMachineError["failur
 // Lume's pull API requires name:tag; Cua's dated tags are immutable.
 const MACOS_IMAGE = "ghcr.io/trycua/macos:26-20261003-a7b1e34";
 export const VM_VIEWER_PREFIX = "/api/vm-viewer";
+
+/**
+ * Cua's sandbox record for a clone of a Lume VM that Cua did not make. With it, Cua
+ * starts, forks, suspends and deletes the clone like its own; Cua fills in the address.
+ */
+const adoptedLumeRecord = (input: {
+  readonly name: string;
+  readonly cpu: number | null;
+  readonly memoryGb: number | null;
+  readonly token: string;
+  readonly createdAt: string;
+}) => ({
+  name: input.name,
+  runtime_type: "lume",
+  image: { distro: "registry", kind: "vm", layers: [], os_type: "macos", registry: input.name },
+  host: "127.0.0.1",
+  api_port: 0,
+  exposed_ports: {},
+  vnc_port: 0,
+  os_type: "macos",
+  memory_mb: input.memoryGb === null ? null : Math.round(input.memoryGb * 1024),
+  cpu_count: input.cpu,
+  status: "stopped",
+  created_at: input.createdAt,
+  env_token: input.token,
+  image_info: { os: "macos", spacesd: true, variant: "lume" },
+  services: { env: 3211 },
+});
 
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const jobDirectory = (id: string) => `"$HOME/.t3-vm-jobs/${id}"`;
@@ -307,6 +337,7 @@ const make = Effect.gen(function* () {
   const platform = yield* HostProcess.Platform;
   const arch = yield* HostProcess.Architecture;
   const environment = yield* HostProcess.Environment;
+  const homeDirectory = yield* HostProcess.HomeDirectory;
   const root = path.join(config.stateDir, "virtual-machines");
   const stateDir = path.join(root, "cua");
   const settingsPath = path.join(root, "settings.json");
@@ -463,7 +494,9 @@ const make = Effect.gen(function* () {
         ? `cua sandbox ${args[1]}`
         : operation === "inventory"
           ? "lume ls"
-          : "cua";
+          : args[0] === "clone"
+            ? "lume clone"
+            : "cua";
     const diagnosticId = `vm-${(yield* random.uuidV4().pipe(Effect.orDie)).replaceAll("-", "").slice(0, 12)}`;
     const details = {
       operation,
@@ -846,6 +879,64 @@ const make = Effect.gen(function* () {
           ),
       ),
     );
+  /** Clones a Lume VM that Cua did not make and registers the clone; the source is never changed. */
+  const cloneLumeMachine = Effect.fn("VirtualMachineService.cloneLumeMachine")(function* (
+    source: VirtualMachineHostInventory["machines"][number],
+    name: string,
+  ) {
+    const args = ["clone", source.name, name];
+    const result = yield* runner
+      .run({ command: "lume", args, timeout: "10 minutes", maxOutputBytes: 1024 * 1024 })
+      .pipe(Effect.catch((cause) => failCommand("create", args, cause)));
+    if (result.code !== 0) return yield* failCommand("create", args, result);
+    inventoryRevision++;
+    const uuid = random.uuidV4().pipe(Effect.orDie);
+    const token = `${yield* uuid}${yield* uuid}`.replaceAll("-", "");
+    const record = adoptedLumeRecord({
+      name,
+      cpu: source.cpu,
+      memoryGb: source.memoryGb,
+      token,
+      createdAt: DateTime.formatIso(yield* DateTime.now),
+    });
+    // Cua shares this folder with the guest at every start. Its guest service takes the
+    // token from there, and ports.json says the guest publishes that service. The folder
+    // is created only for a clone, never for its source.
+    const vmm = path.join(homeDirectory, ".cua", "vmm", "lume", name);
+    const writePrivate = (directory: string, file: string, contents: string) => {
+      const partial = path.join(directory, `.${file}.partial`);
+      return fs
+        .makeDirectory(directory, { recursive: true, mode: 0o700 })
+        .pipe(
+          Effect.andThen(fs.remove(partial, { force: true })),
+          Effect.andThen(fs.writeFileString(partial, contents, { flag: "wx", mode: 0o600 })),
+          Effect.andThen(fs.rename(partial, path.join(directory, file))),
+        );
+    };
+    // The record goes last because it makes the clone visible to Cua and to T3.
+    yield* writePrivate(path.join(vmm, "setup"), "env-token", token).pipe(
+      Effect.andThen(writePrivate(vmm, "ports.json", "[3211]")),
+      Effect.andThen(encodeJson(record)),
+      Effect.flatMap((contents) => writePrivate(stateDir, `${name}.json`, contents)),
+      Effect.mapError(
+        (cause) => new VirtualMachineError({ operation: "create", reason: "storage", cause }),
+      ),
+      // Without its record the clone is a Lume VM T3 cannot see, so it is removed.
+      Effect.tapError(() =>
+        fs.remove(vmm, { recursive: true, force: true }).pipe(
+          Effect.ignore,
+          Effect.andThen(
+            runner.run({
+              command: "lume",
+              args: ["delete", name, "--force"],
+              timeout: "2 minutes",
+            }),
+          ),
+          Effect.ignore,
+        ),
+      ),
+    );
+  });
   const create = Effect.fn("VirtualMachineService.create")(function* (
     input: VirtualMachineCreateInput,
   ) {
@@ -858,11 +949,20 @@ const make = Effect.gen(function* () {
     if (current.operations.some((operation) => operation.status === "creating")) {
       return yield* new VirtualMachineError({ operation: "create", reason: "busy" });
     }
+    // A source outside Cua, such as a prepared macOS 27 base, is cloned with Lume instead.
+    let lumeSource: VirtualMachineHostInventory["machines"][number] | undefined;
     if (input.from !== undefined) {
       const source = current.machines.find((machine) => machine.name === input.from);
-      if (!source)
+      if (!source) {
+        const host = yield* hostInventory();
+        lumeSource = host.machines.find((machine) => machine.name === input.from);
+        if (host.machines.some((machine) => machine.name === input.name))
+          return yield* new VirtualMachineError({ operation: "create", reason: "already-exists" });
+      }
+      const status = (source ?? lumeSource)?.status;
+      if (status === undefined)
         return yield* new VirtualMachineError({ operation: "create", reason: "not-found" });
-      if (source.status !== "stopped")
+      if (status !== "stopped")
         return yield* new VirtualMachineError({ operation: "create", reason: "source-running" });
     }
     yield* publish((value) => ({
@@ -876,9 +976,11 @@ const make = Effect.gen(function* () {
     const command =
       input.from === undefined
         ? run("create", createArgs(input), { timeout: "60 minutes" })
-        : run("create", ["sandbox", "fork", `local:${input.from}`, input.name], {
-            timeout: "10 minutes",
-          });
+        : lumeSource
+          ? cloneLumeMachine(lumeSource, input.name)
+          : run("create", ["sandbox", "fork", `local:${input.from}`, input.name], {
+              timeout: "10 minutes",
+            });
     yield* withSlotHolders(command).pipe(
       Effect.andThen(() =>
         list().pipe(

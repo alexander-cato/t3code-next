@@ -195,6 +195,47 @@ disk with APFS clonefile and restores the saved memory, so the clone is ready in
 seconds with a new machine identity. The source must be suspended because a
 running source would be copied mid-write.
 
+### macOS 27 guests
+
+Cua's images run macOS Tahoe. A macOS 27 VM starts from a Lume VM that Cua did
+not create, such as a clone of Native Tile's CI image, prepared once by hand the
+way Cua's image is:
+
+1. SIP is off (recoveryOS, then `csrutil disable`), so an agent can grant an app
+   it built Accessibility or Screen Recording by writing TCC.db.
+2. Cua's guest service is installed as in Cua's image:
+   `/Applications/Cua Spacesd.app`, `/opt/cua/bin/start-spacesd.sh`, and the
+   `com.trycua.spacesd` LaunchAgent.
+3. `com.trycua.cua-env-driver` has Accessibility, Screen Recording, and PostEvent
+   in the system TCC.db, and Cua's `ScreenCaptureApprovals.plist` keeps macOS
+   from asking about the private window picker.
+4. No token is baked in, and `~/.cua/spacesd` is empty, so each clone gets its
+   own token and machine key.
+5. Setup Assistant has been finished once, so a boot reaches the desktop.
+
+`vm_create` with `from` naming such a VM runs `lume clone` and then writes the
+files that make the clone a Cua sandbox, the same files Cua writes for its own:
+
+- `virtual-machines/cua/<name>.json` under the state directory, Cua's sandbox
+  record, with a new 256-bit guest token. Like Cua's own records it is 0600 in
+  a 0700 folder.
+- `~/.cua/vmm/lume/<name>/setup/env-token`, the same token. Cua shares this
+  folder with the guest at every start, and `start-spacesd.sh` reads it there.
+- `~/.cua/vmm/lume/<name>/ports.json`, `[3211]`. It tells Cua the guest
+  publishes its service; without it Cua runs commands over SSH and refuses
+  `--cwd` and `--timeout`.
+
+The record is written last, and a failed write removes the clone and its folder.
+These are Cua's private formats, checked against Cua 0.24.1, so a Cua update
+that changes them breaks this path at `device_open` and nothing else.
+`cua sandbox rm` deletes the clone, its folder, and its record.
+
+Cua's own VMs sit behind its network gateway, which forwards guest ports to
+127.0.0.1. A clone made this way stays on Lume's NAT, and Cua reaches its guest
+service at the guest's 192.168.64.x address. macOS lets an app reach that
+address only with Local Network permission, so the app that runs the T3 server
+needs it. Without it, `device_open` waits for the desktop and fails.
+
 VM tabs stay mounted while hidden
 ([`VirtualMachineTabs`](../../apps/web/src/components/vm/VirtualMachineTabs.tsx)):
 remounting reopens the VM and restarts Cua's stream, which takes seconds where a
