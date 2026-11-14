@@ -13,6 +13,7 @@ const workspaceFiles = [
   "package.json",
   "pnpm-lock.yaml",
   "pnpm-workspace.yaml",
+  ".pnpmfile.cjs",
   "apps/server/package.json",
   "apps/desktop/package.json",
   "apps/web/package.json",
@@ -241,15 +242,19 @@ try {
     },
   );
 
-  NodeFS.rmSync(NodePath.resolve(tempRoot, "pnpm-lock.yaml"), { force: true });
-
-  NodeChildProcess.execFileSync("vp", ["install", "--lockfile-only", "--ignore-scripts"], {
-    cwd: tempRoot,
-    stdio: "inherit",
-  });
+  NodeChildProcess.execFileSync(
+    "vp",
+    ["install", "--lockfile-only", "--ignore-scripts", "--frozen-lockfile", "--offline"],
+    {
+      cwd: tempRoot,
+      stdio: "inherit",
+    },
+  );
 
   const lockfile = NodeFS.readFileSync(NodePath.resolve(tempRoot, "pnpm-lock.yaml"), "utf8");
-  assertContains(lockfile, "lockfileVersion:", "Expected pnpm-lock.yaml to be regenerated.");
+  if (lockfile !== NodeFS.readFileSync(NodePath.resolve(repoRoot, "pnpm-lock.yaml"), "utf8")) {
+    throw new Error("Release version updates must preserve the reviewed lockfile.");
+  }
 
   for (const relativePath of [
     "apps/server/package.json",
