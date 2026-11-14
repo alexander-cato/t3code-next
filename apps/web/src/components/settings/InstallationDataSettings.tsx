@@ -59,7 +59,7 @@ export function InstallationDataSettings({
     if (!source) return;
     if (
       !(await requestConfirmDialog(
-        "Import a separate copy of this installation's data? The fork will restart, replace its local data, and save its current data as a backup. Close the source app first. Imported scheduled tasks and automatic thread resumes start disabled. Browser sign-ins, device permissions, T3 Connect authorization, and connection credentials remain separate.",
+        "Import a separate copy of this installation's data? The fork will restart, replace its local data, and save its current data as a backup. Close the source app first. Imported scheduled tasks, PR watches, and automatic thread resumes start off. Browser sign-ins, device permissions, T3 Connect authorization, and connection credentials remain separate.",
       ))
     )
       return;

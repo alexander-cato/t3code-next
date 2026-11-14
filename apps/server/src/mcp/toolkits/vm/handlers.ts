@@ -18,7 +18,12 @@ export const layerStandard = McpToolAccess.toLayer(VmStandardToolkit, {
       yield* requireDeviceAccess;
       const vms = yield* VirtualMachineService.VirtualMachineService;
       yield* vms.create(input);
-      return { message: "VM creation started. device_list reports progress and any failure." };
+      return {
+        message:
+          input.from === undefined
+            ? "VM creation started. device_list reports progress and any failure."
+            : `Cloning ${input.from} started. device_list reports progress and any failure.`,
+      };
     }),
   ),
   vm_delete: McpToolAccess.actsAsCaller((input) =>
@@ -36,11 +41,35 @@ export const layerStandard = McpToolAccess.toLayer(VmStandardToolkit, {
       return yield* vms.exec(scope.thread.threadId, input);
     }),
   ),
+  vm_job: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const scope = yield* requireDeviceAccess;
+      const vms = yield* VirtualMachineService.VirtualMachineService;
+      return yield* vms.job(scope.thread.threadId, input);
+    }),
+  ),
+  vm_download: McpToolAccess.actsAsCaller((input) =>
+    Effect.gen(function* () {
+      const scope = yield* requireDeviceAccess;
+      const vms = yield* VirtualMachineService.VirtualMachineService;
+      const { bytes } = yield* vms.download(scope.thread.threadId, input);
+      return { message: "The file was copied into the workspace.", bytes };
+    }),
+  ),
   vm_tools: McpToolAccess.readsAsCaller((input) =>
     Effect.gen(function* () {
       const scope = yield* requireDeviceAccess;
       const vms = yield* VirtualMachineService.VirtualMachineService;
-      return yield* vms.tools(scope.thread.threadId, input.name);
+      const tools = yield* vms.tools(scope.thread.threadId, input.name);
+      // Every schema together is over 150 KB, more than an agent can take in one result.
+      if (input.tools !== undefined)
+        return tools.filter((tool) => input.tools!.includes(tool.name));
+      return {
+        tools: tools.map((tool) => ({
+          name: tool.name,
+          ...(tool.description ? { description: tool.description.slice(0, 240) } : {}),
+        })),
+      };
     }),
   ),
 });
