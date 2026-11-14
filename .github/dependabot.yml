@@ -1,0 +1,12 @@
+version: 2
+updates:
+  # .repos/ holds vendored read-only references, refreshed with `vpr sync:repos` when the matching
+  # dependency moves. `ignore` also applies to security updates; `exclude-paths` does not.
+  - package-ecosystem: npm
+    directories:
+      - "/.repos/**"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    ignore:
+      - dependency-name: "*"
