@@ -53,7 +53,10 @@ const fixture = Effect.fn("vm.fixture")(function* (options?: {
   readonly environment?: NodeJS.ProcessEnv;
   readonly create?: Effect.Effect<ProcessRunner.ProcessRunOutput, ProcessRunner.ProcessRunError>;
   readonly power?: ProcessRunner.ProcessRunOutput;
-  readonly exec?: Effect.Effect<ProcessRunner.ProcessRunOutput>;
+  readonly exec?:
+    | Effect.Effect<ProcessRunner.ProcessRunOutput>
+    | ((command: string) => ProcessRunner.ProcessRunOutput);
+  readonly lume?: ProcessRunner.ProcessRunOutput;
   readonly list?: (
     count: number,
   ) => ProcessRunner.ProcessRunOutput | Effect.Effect<ProcessRunner.ProcessRunOutput> | undefined;
@@ -154,6 +157,7 @@ const fixture = Effect.fn("vm.fixture")(function* (options?: {
   const runner = ProcessRunner.ProcessRunner.of({
     run: Effect.fn("fixture.run")(function* (input) {
       calls.push(input);
+      if (input.command === "lume") return options?.lume ?? output("[]");
       const args = input.args.slice(4);
       const origin =
         args[2] === "local:second-vm" ? "http://192.168.64.3:3211" : "http://192.168.64.2:3211";
@@ -212,8 +216,14 @@ const fixture = Effect.fn("vm.fixture")(function* (options?: {
           status = "stopped";
           return output("{}");
         case "exec":
+          if (typeof options?.exec === "function") return options.exec(args.at(-1)!);
           if (options?.exec) return yield* options.exec;
           return output(json({ stdout: "guest output", stderr: "", returncode: 23 }), 23);
+        case "cp":
+          // A download leaves the guest file at the host path Cua was given.
+          if (args[2]!.startsWith("local:"))
+            yield* fs.writeFileString(args[3]!, "guest file").pipe(Effect.orDie);
+          return output("{}");
         case "create":
           return options?.create ? yield* options.create : output("{}");
         default:
@@ -350,6 +360,19 @@ it.effect.each([
   [
     "limit",
     "The maximum number of supported virtual machines has been reached",
+    "vm-limit",
+    "running VM limit",
+  ],
+  // Virtualization's own wording for the limit.
+  [
+    "Apple limit",
+    "The number of virtual machines exceeds the limit. The maximum supported number of active virtual machines has been reached.",
+    "vm-limit",
+    "running VM limit",
+  ],
+  [
+    "Cua limit",
+    "this Mac already runs 2 macOS VMs (work, nt-ci-3); Apple allows 2 at once",
     "vm-limit",
     "running VM limit",
   ],
@@ -575,9 +598,27 @@ it.effect("pins guest commands to an open thread and preserves command exit code
         "sandbox",
         "exec",
         "local:native-tile",
+        "--timeout",
+        "300",
         "--",
         command,
       ]);
+      // Cua stops the command at the limit; the host process waits a little longer for its reply.
+      yield* vms.exec(threadId, {
+        name: "native-tile",
+        command: "./script/ci.sh",
+        cwd: "/Users/lume/app",
+        timeoutSeconds: 1800,
+      });
+      expect(calls.at(-1)?.args.slice(7)).toEqual([
+        "--timeout",
+        "1800",
+        "--cwd",
+        "/Users/lume/app",
+        "--",
+        "./script/ci.sh",
+      ]);
+      expect(calls.at(-1)?.timeout).toBe("1830 seconds");
       yield* vms.control(threadId, { name: "native-tile", tool: "drag", arguments: { x: 10 } });
       expect(calls.at(-1)?.args.slice(4)).toEqual([
         "sandbox",
@@ -750,6 +791,7 @@ it.effect("uploads workspace artifacts and rejects paths or symlinks outside the
           .upload(threadId, { name: "native-tile", relativePath, guestPath: "/tmp/artifact" })
           .pipe(Effect.provide(layer), Effect.flip);
         expect(error.reason).toBe("not-found");
+        expect(error.message).toContain("inside this thread's workspace");
       }
       expect(calls.some((call) => call.args.includes("cp"))).toBe(false);
       yield* vms
@@ -957,6 +999,17 @@ it.effect.each(["stop", "remove"] as const)(
         yield* vms.tools(otherThread, "native-tile");
         yield* vms[action]("native-tile");
         expect((yield* vms.state).sessions).toEqual([{ name: "second-vm", threadId }]);
+        // Neither thread asked for this, so each one's next call says what took its session.
+        for (const thread of [threadId, otherThread]) {
+          const lost = yield* vms
+            .exec(thread, { name: "native-tile", command: "id" })
+            .pipe(Effect.flip);
+          expect(lost).toMatchObject({
+            reason: "not-open",
+            closedBy: action === "stop" ? "suspend" : "delete",
+          });
+          expect(lost.message).toContain(action === "stop" ? "suspended" : "deleted");
+        }
         for (const viewer of [first, other]) {
           expect(yield* vms.viewerUpstream(viewer.viewerPath.split("/")[3]!)).toBeNull();
         }
@@ -1522,6 +1575,353 @@ it.effect("clears cursor setup after session_ended and leaves failed revival unt
         "click",
       ]);
       expect(clicks).toBe(3);
+    }),
+  ),
+);
+
+it.effect("a closed or reopened session reports its own reason, not another thread's", () =>
+  provide(
+    Effect.gen(function* () {
+      const { vms } = yield* fixture();
+      const run = (thread: ThreadId) =>
+        vms.exec(thread, { name: "native-tile", command: "id" }).pipe(Effect.flip);
+      expect((yield* run(threadId)).closedBy).toBeUndefined();
+      yield* vms.open({ name: "native-tile", threadId });
+      yield* vms.open({ name: "native-tile", threadId: otherThread });
+      yield* vms.close({ name: "native-tile", threadId });
+      expect((yield* run(threadId)).closedBy).toBe("close");
+      expect(yield* vms.otherSessions(threadId, "native-tile")).toBe(1);
+      yield* vms.stop("native-tile");
+      // The suspend ended only the other thread's session; this one was already closed.
+      expect((yield* run(threadId)).closedBy).toBe("close");
+      expect((yield* run(otherThread)).closedBy).toBe("suspend");
+      yield* vms.open({ name: "native-tile", threadId });
+      yield* vms.exec(threadId, { name: "native-tile", command: "id" });
+      yield* vms.configure(false);
+      yield* vms.configure(true);
+      expect((yield* run(threadId)).closedBy).toBe("disable");
+    }),
+  ),
+);
+
+it.effect("runs a background job from a file and reads its state without a long-lived call", () =>
+  provide(
+    Effect.gen(function* () {
+      const scripts: string[] = [];
+      let reply = "/Users/lume/.t3-vm-jobs/job/log\n";
+      const { vms, calls } = yield* fixture({
+        exec: (script) => {
+          scripts.push(script);
+          return output(json({ stdout: reply, stderr: "", returncode: 0 }));
+        },
+      });
+      yield* vms.open({ name: "native-tile", threadId });
+      const command = "xcodebuild test -scheme 'Acme App' && echo \"it's done\"";
+      const started = yield* vms.exec(threadId, {
+        name: "native-tile",
+        command,
+        cwd: "/Users/lume/my app",
+        background: true,
+      });
+      expect(started).toEqual({
+        jobId: expect.stringMatching(/^[a-f0-9]{12}$/),
+        logPath: "/Users/lume/.t3-vm-jobs/job/log",
+      });
+      if (!("jobId" in started)) return;
+      // The start call returns at once, so it never waits on the job's own duration.
+      expect(calls.at(-1)?.args.slice(7, 9)).toEqual(["--timeout", "60"]);
+      const start = scripts.at(-1)!;
+      expect(start).toContain(`"$HOME/.t3-vm-jobs/${started.jobId}"`);
+      // Single-quoted for the file write, so the guest shell expands nothing in it.
+      expect(start).toContain(
+        `'xcodebuild test -scheme '\\''Acme App'\\'' && echo "it'\\''s done"'`,
+      );
+      expect(start).toContain("cd '/Users/lume/my app' && sh \"$d/command\"");
+
+      reply = "T3JOB running\n/Users/lume/.t3-vm-jobs/job/log\nCompiling\nLinking";
+      expect(yield* vms.job(threadId, { name: "native-tile", jobId: started.jobId })).toEqual({
+        state: "running",
+        exitCode: null,
+        output: "Compiling\nLinking",
+        logPath: "/Users/lume/.t3-vm-jobs/job/log",
+      });
+      expect(scripts.at(-1)).toContain("tail -c 16000");
+      expect(scripts.at(-1)).not.toContain("kill -TERM");
+
+      reply = "T3JOB exited 65\n/Users/lume/.t3-vm-jobs/job/log\n** TEST FAILED **";
+      expect(
+        yield* vms.job(threadId, {
+          name: "native-tile",
+          jobId: started.jobId,
+          tailBytes: 500,
+          stop: true,
+        }),
+      ).toMatchObject({ state: "exited", exitCode: 65, output: "** TEST FAILED **" });
+      expect(scripts.at(-1)).toContain("tail -c 500");
+      // A stop that found only the outer shell left `sleep 600` running in the guest.
+      expect(scripts.at(-1)).toContain('tree "$c"');
+      // A wrapper killed mid-write once left an empty exit file, read as exit code 0.
+      reply = "T3JOB exited \n/Users/lume/.t3-vm-jobs/job/log\n";
+      expect(yield* vms.job(threadId, { name: "native-tile", jobId: started.jobId })).toMatchObject(
+        { state: "exited", exitCode: null },
+      );
+
+      reply = "T3JOB lost\n/Users/lume/.t3-vm-jobs/job/log\n";
+      expect(yield* vms.job(threadId, { name: "native-tile", jobId: started.jobId })).toMatchObject(
+        { state: "lost", exitCode: null },
+      );
+      reply = "T3JOB missing\n";
+      expect(
+        (yield* vms.job(threadId, { name: "native-tile", jobId: started.jobId }).pipe(Effect.flip))
+          .reason,
+      ).toBe("not-found");
+      expect(
+        (yield* vms
+          .job(otherThread, { name: "native-tile", jobId: started.jobId })
+          .pipe(Effect.flip)).reason,
+      ).toBe("not-open");
+    }),
+  ),
+);
+
+it.effect("downloads a guest file into the workspace and refuses targets outside it", () =>
+  provide(
+    Effect.gen(function* () {
+      const { vms, calls, root, fs, path } = yield* fixture();
+      yield* vms.open({ name: "native-tile", threadId });
+      const workspace = path.join(root, "workspace");
+      yield* fs.makeDirectory(path.join(workspace, "results"), { recursive: true });
+      const outside = path.join(root, "outside");
+      yield* fs.makeDirectory(outside);
+      yield* fs.writeFileString(path.join(outside, "secret.txt"), "host file");
+      yield* fs.symlink(outside, path.join(workspace, "escape"));
+      yield* fs.symlink(path.join(outside, "secret.txt"), path.join(workspace, "link.txt"));
+      const shell = { worktreePath: workspace } as OrchestrationV2ThreadShell;
+      const layer = Layer.mergeAll(
+        Layer.mock(ThreadManagementService.ThreadManagementService)({
+          getThreadShell: () => Effect.succeed(shell),
+        }),
+        Layer.mock(ProjectService.ProjectService)({}),
+      );
+      const download = (relativePath: string) =>
+        vms
+          .download(threadId, { name: "native-tile", guestPath: "/tmp/tests.xml", relativePath })
+          .pipe(Effect.provide(layer));
+      // A parent symlink, an existing symlink, a directory, and plain traversal all leave the workspace.
+      for (const relativePath of [
+        "../outside/new.txt",
+        path.join(outside, "new.txt"),
+        "escape/new.txt",
+        "link.txt",
+        "results",
+        ".",
+      ]) {
+        expect((yield* download(relativePath).pipe(Effect.flip)).reason).toBe("not-found");
+      }
+      expect((yield* download("missing/tests.xml").pipe(Effect.flip)).reason).toBe("storage");
+      expect(calls.some((call) => call.args.includes("cp"))).toBe(false);
+      expect(yield* fs.readFileString(path.join(outside, "secret.txt"))).toBe("host file");
+
+      const target = path.join(yield* fs.realPath(workspace), "results", "tests.xml");
+      expect(yield* download("results/tests.xml")).toEqual({ bytes: 10 });
+      expect(calls.at(-1)?.args.slice(4)).toEqual([
+        "sandbox",
+        "cp",
+        "local:native-tile:/tmp/tests.xml",
+        target,
+      ]);
+      // A second run replaces the regular file the first one wrote.
+      expect(yield* download("results/tests.xml")).toEqual({ bytes: 10 });
+    }),
+  ),
+);
+
+it.effect.each([
+  {
+    name: "a guest with Xcode and SIP off",
+    stdout: [
+      "macos=27.2",
+      "cpu=12",
+      "memory=17179869184",
+      "diskFreeKb=73400320",
+      "user=lume",
+      "xcode=Xcode 27.2",
+      "swift=Apple Swift version 6.4 (swiftlang-6.4.0.1 clang-1800.0.1)",
+      "brew=",
+      "sip=System Integrity Protection status: disabled.",
+      "sudo=",
+    ].join("\n"),
+    expected: {
+      macos: "27.2",
+      cpu: 12,
+      memoryGb: 16,
+      diskFreeGb: 70,
+      user: "lume",
+      xcode: "Xcode 27.2",
+      swift: "Apple Swift version 6.4 (swiftlang-6.4.0.1 clang-1800.0.1)",
+      homebrew: false,
+      sipEnabled: false,
+      passwordlessSudo: false,
+    },
+  },
+  {
+    name: "Command Line Tools only",
+    stdout:
+      "macos=26.5.2\ncpu=4\nmemory=8589934592\ndiskFreeKb=\nuser=lume\nxcode=\nswift=Swift 6.3.3\nbrew=/opt/homebrew/bin/brew\nsip=System Integrity Protection status: enabled.\nsudo=yes\n",
+    expected: {
+      macos: "26.5.2",
+      cpu: 4,
+      memoryGb: 8,
+      diskFreeGb: null,
+      user: "lume",
+      xcode: null,
+      swift: "Swift 6.3.3",
+      homebrew: true,
+      sipEnabled: true,
+      passwordlessSudo: true,
+    },
+  },
+  { name: "a shell that printed nothing usable", stdout: "zsh: command not found", expected: null },
+])("reads what a guest can build: $name", ({ stdout, expected }) =>
+  Effect.sync(() => {
+    expect(VirtualMachineService.parseGuestProbe(stdout)).toEqual(expected);
+  }),
+);
+
+it.effect("probes a guest once and again only after it is deleted", () =>
+  provide(
+    Effect.gen(function* () {
+      const { vms, calls } = yield* fixture({
+        exec: () => output(json({ stdout: "macos=27.2\nuser=lume\n", stderr: "", returncode: 0 })),
+      });
+      const probes = () => calls.filter((call) => call.args.includes("exec")).length;
+      expect((yield* vms.inspect(threadId, "native-tile").pipe(Effect.flip)).reason).toBe(
+        "not-open",
+      );
+      yield* vms.open({ name: "native-tile", threadId });
+      expect(yield* vms.inspect(threadId, "native-tile")).toMatchObject({ macos: "27.2" });
+      yield* vms.stop("native-tile");
+      yield* vms.open({ name: "native-tile", threadId });
+      yield* vms.inspect(threadId, "native-tile");
+      expect(probes()).toBe(1);
+      expect(Object.keys(yield* vms.knownGuests)).toEqual(["native-tile"]);
+      yield* vms.remove("native-tile");
+      expect(yield* vms.knownGuests).toEqual({});
+    }),
+  ),
+);
+
+it.effect("lists every macOS VM in Lume's store and marks the ones T3 cannot open", () =>
+  provide(
+    Effect.gen(function* () {
+      const { vms, calls } = yield* fixture({
+        lume: output(
+          `[2026-11-14T07:00:00Z] INFO: Listing VMs\n${json([
+            {
+              name: "native-tile",
+              status: "running",
+              os: "macOS",
+              cpuCount: 4,
+              memorySize: 8589934592,
+            },
+            {
+              name: "ci-base",
+              status: "stopped",
+              os: "macOS",
+              cpuCount: 12,
+              memorySize: 17179869184,
+            },
+            { name: "nt-ci-1", status: "running", os: "macOS" },
+            { name: "ubuntu", status: "running", os: "linux", cpuCount: 2, memorySize: 2147483648 },
+          ])}`,
+        ),
+      });
+      yield* vms.list;
+      expect(yield* vms.hostInventory).toEqual({
+        runningLimit: 2,
+        machines: [
+          { name: "native-tile", status: "running", cpu: 4, memoryGb: 8, managed: true },
+          { name: "ci-base", status: "stopped", cpu: 12, memoryGb: 16, managed: false },
+          { name: "nt-ci-1", status: "running", cpu: null, memoryGb: null, managed: false },
+        ],
+      });
+      expect(calls.at(-1)).toMatchObject({ command: "lume", args: ["ls", "--format", "json"] });
+      const broken = yield* fixture({ lume: output("lume: daemon not reachable", 1) });
+      yield* broken.vms.list;
+      expect(yield* broken.vms.hostInventory.pipe(Effect.flip)).toMatchObject({
+        reason: "command-failed",
+        command: "lume ls",
+      });
+    }),
+  ),
+);
+
+it.effect("clones only a suspended VM it manages, through a fork rather than a download", () =>
+  provide(
+    Effect.gen(function* () {
+      const running = yield* fixture({ machines: ["base"], status: "ready" });
+      expect(
+        (yield* running.vms
+          .create({ name: "copy", cpu: 4, memoryGb: 8, from: "base" })
+          .pipe(Effect.flip)).reason,
+      ).toBe("source-running");
+      expect(
+        (yield* running.vms
+          .create({ name: "copy", cpu: 4, memoryGb: 8, from: "elsewhere" })
+          .pipe(Effect.flip)).reason,
+      ).toBe("not-found");
+      expect(running.calls.some((call) => call.args.includes("fork"))).toBe(false);
+
+      const { vms, calls } = yield* fixture({ machines: ["base"] });
+      // The first refresh publishes availability; subscribing after it leaves only the clone's states.
+      yield* vms.list;
+      const subscription = yield* vms.subscribe;
+      yield* vms.create({ name: "copy", cpu: 4, memoryGb: 8, from: "base" });
+      yield* Stream.fromSubscription(subscription).pipe(
+        Stream.filter((state) => state.operations.length === 0),
+        Stream.runHead,
+      );
+      expect(calls.find((call) => call.args.includes("fork"))?.args.slice(4)).toEqual([
+        "sandbox",
+        "fork",
+        "local:base",
+        "copy",
+      ]);
+      expect(calls.some((call) => call.args.includes("create"))).toBe(false);
+    }),
+  ),
+);
+
+it.effect("names the running VMs when a start hits Apple's two-guest limit", () =>
+  provide(
+    Effect.gen(function* () {
+      const limit: ProcessRunner.ProcessRunOutput = {
+        ...output("", 1),
+        stderr:
+          "The number of virtual machines exceeds the limit. The maximum supported number of active virtual machines has been reached.",
+      };
+      const { vms } = yield* fixture({
+        resume: limit,
+        lume: output(
+          json([
+            { name: "native-tile", status: "stopped", os: "macOS" },
+            { name: "work", status: "running", os: "macOS" },
+            { name: "nt-ci-7", status: "starting", os: "macOS" },
+            { name: "old", status: "suspended", os: "macOS" },
+          ]),
+        ),
+      });
+      const error = yield* vms.open({ name: "native-tile", threadId }).pipe(Effect.flip);
+      expect(error).toMatchObject({ failure: "vm-limit", runningMachines: ["work", "nt-ci-7"] });
+      expect(error.message).toContain("these are running: work, nt-ci-7");
+      // The names travel to clients, so they survive the RPC error encoding.
+      expect(decodeVmError(encodeVmError(error)).runningMachines).toEqual(["work", "nt-ci-7"]);
+      expect((yield* vms.state).sessions).toEqual([]);
+
+      const unreadable = yield* fixture({ resume: limit, lume: output("", 1) });
+      const plain = yield* unreadable.vms.open({ name: "native-tile", threadId }).pipe(Effect.flip);
+      expect(plain).toMatchObject({ failure: "vm-limit" });
+      expect(plain.runningMachines).toBeUndefined();
     }),
   ),
 );

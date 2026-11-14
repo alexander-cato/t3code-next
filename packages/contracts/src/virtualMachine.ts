@@ -12,8 +12,18 @@ export type VirtualMachineTarget = typeof VirtualMachineTarget.Type;
 
 export const VirtualMachineCreateInput = Schema.Struct({
   name: VirtualMachineName,
-  cpu: Schema.Int.check(Schema.isBetween({ minimum: 2, maximum: 16 })),
-  memoryGb: Schema.Int.check(Schema.isBetween({ minimum: 4, maximum: 64 })),
+  cpu: Schema.Int.check(Schema.isBetween({ minimum: 2, maximum: 16 })).annotate({
+    description: "vCPUs for a new VM. A clone keeps its source's.",
+  }),
+  memoryGb: Schema.Int.check(Schema.isBetween({ minimum: 4, maximum: 64 })).annotate({
+    description: "Memory in GB for a new VM. A clone keeps its source's.",
+  }),
+  from: Schema.optional(
+    VirtualMachineName.annotate({
+      description:
+        "Clone this suspended VM instead of downloading a new one. The clone is a new machine with the source's disk, apps and permission grants, ready in seconds.",
+    }),
+  ),
 });
 export type VirtualMachineCreateInput = typeof VirtualMachineCreateInput.Type;
 
@@ -61,16 +71,85 @@ export const VirtualMachineViewer = Schema.Struct({
 });
 export type VirtualMachineViewer = typeof VirtualMachineViewer.Type;
 
+const GuestPath = TrimmedNonEmptyString.check(Schema.isMaxLength(1024), Schema.isPattern(/^\//));
+
 export const VirtualMachineExecInput = Schema.Struct({
   name: VirtualMachineName,
   command: TrimmedNonEmptyString.check(Schema.isMaxLength(128_000)),
+  cwd: Schema.optional(
+    GuestPath.annotate({ description: "Absolute guest directory to run in. Default: home." }),
+  ),
+  timeoutSeconds: Schema.optional(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 3600 })).annotate({
+      description: "Seconds before the command is stopped with exitCode 124. Default 300.",
+    }),
+  ),
+  background: Schema.optional(
+    Schema.Boolean.annotate({
+      description:
+        "Start the command detached and return a jobId at once. Read it with vm_job. Use for anything that may outlast timeoutSeconds.",
+    }),
+  ),
 });
 export type VirtualMachineExecInput = typeof VirtualMachineExecInput.Type;
-export const VirtualMachineExecResult = Schema.Struct({
-  stdout: Schema.String,
-  stderr: Schema.String,
-  exitCode: Schema.Number,
+
+export const VirtualMachineJobId = Schema.String.check(Schema.isPattern(/^[a-f0-9]{12}$/));
+export const VirtualMachineExecResult = Schema.Union([
+  Schema.Struct({ stdout: Schema.String, stderr: Schema.String, exitCode: Schema.Number }),
+  Schema.Struct({ jobId: VirtualMachineJobId, logPath: Schema.String }),
+]);
+export type VirtualMachineExecResult = typeof VirtualMachineExecResult.Type;
+
+export const VirtualMachineJobInput = Schema.Struct({
+  name: VirtualMachineName,
+  jobId: VirtualMachineJobId,
+  tailBytes: Schema.optional(
+    Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 1_000_000 })).annotate({
+      description: "Bytes of combined output to return from the end of the log. Default 16000.",
+    }),
+  ),
+  stop: Schema.optional(
+    Schema.Boolean.annotate({ description: "Terminate the job before reading it." }),
+  ),
 });
+export type VirtualMachineJobInput = typeof VirtualMachineJobInput.Type;
+export const VirtualMachineJobResult = Schema.Struct({
+  // `lost` means the job's process is gone without an exit code, as after a guest restart.
+  state: Schema.Literals(["running", "exited", "lost"]),
+  exitCode: Schema.NullOr(Schema.Number),
+  output: Schema.String,
+  logPath: Schema.String,
+});
+export type VirtualMachineJobResult = typeof VirtualMachineJobResult.Type;
+
+export const VirtualMachineGuest = Schema.Struct({
+  macos: Schema.String,
+  cpu: Schema.NullOr(Schema.Number),
+  memoryGb: Schema.NullOr(Schema.Number),
+  diskFreeGb: Schema.NullOr(Schema.Number),
+  user: Schema.String,
+  // Null without a full Xcode. The Command Line Tools alone cannot run xcodebuild or XCTest.
+  xcode: Schema.NullOr(Schema.String),
+  swift: Schema.NullOr(Schema.String),
+  homebrew: Schema.Boolean,
+  sipEnabled: Schema.NullOr(Schema.Boolean),
+  passwordlessSudo: Schema.Boolean,
+});
+export type VirtualMachineGuest = typeof VirtualMachineGuest.Type;
+
+export const VirtualMachineHostMachine = Schema.Struct({
+  name: Schema.String,
+  status: Schema.String,
+  cpu: Schema.NullOr(Schema.Number),
+  memoryGb: Schema.NullOr(Schema.Number),
+  // False for Lume VMs other tools created; T3 lists them but cannot open them.
+  managed: Schema.Boolean,
+});
+export const VirtualMachineHostInventory = Schema.Struct({
+  runningLimit: Schema.Number,
+  machines: Schema.Array(VirtualMachineHostMachine),
+});
+export type VirtualMachineHostInventory = typeof VirtualMachineHostInventory.Type;
 
 export const VirtualMachineControlInput = Schema.Struct({
   name: VirtualMachineName,
@@ -85,6 +164,24 @@ export const VirtualMachineUploadInput = Schema.Struct({
   guestPath: TrimmedNonEmptyString.check(Schema.isPattern(/^\//)),
 });
 export type VirtualMachineUploadInput = typeof VirtualMachineUploadInput.Type;
+
+export const VirtualMachineDownloadInput = Schema.Struct({
+  name: VirtualMachineName,
+  guestPath: GuestPath,
+  relativePath: TrimmedNonEmptyString,
+});
+export type VirtualMachineDownloadInput = typeof VirtualMachineDownloadInput.Type;
+
+export const VirtualMachineToolsInput = Schema.Struct({
+  name: VirtualMachineName,
+  tools: Schema.optional(
+    Schema.Array(TrimmedNonEmptyString).annotate({
+      description:
+        "Tool names to return with their full JSON schemas. Omit to list every tool's name and description only.",
+    }),
+  ),
+});
+export type VirtualMachineToolsInput = typeof VirtualMachineToolsInput.Type;
 
 export const VirtualMachineScreenshot = Schema.Struct({
   name: VirtualMachineName,
@@ -107,6 +204,8 @@ export class VirtualMachineError extends Schema.TaggedError<VirtualMachineError>
       "not-found",
       "not-open",
       "busy",
+      "source-running",
+      "shared",
       "already-exists",
       "command-failed",
       "invalid-response",
@@ -130,6 +229,14 @@ export class VirtualMachineError extends Schema.TaggedError<VirtualMachineError>
       ]),
     ),
     diagnosticId: Schema.optional(Schema.String.check(Schema.isMaxLength(32))),
+    // Running macOS VMs on the host when a start hit Apple's limit of two.
+    runningMachines: Schema.optional(
+      Schema.Array(Schema.String.check(Schema.isMaxLength(128))).check(Schema.isMaxLength(8)),
+    ),
+    // Threads other than the caller's that hold the VM open.
+    otherThreads: Schema.optional(Schema.Int),
+    // Why a session this thread once held is gone.
+    closedBy: Schema.optional(Schema.Literals(["close", "suspend", "delete", "disable"])),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
@@ -140,11 +247,35 @@ export class VirtualMachineError extends Schema.TaggedError<VirtualMachineError>
       case "unavailable":
         return "Virtual machines require an Apple silicon Mac with Lume and Cua installed.";
       case "not-found":
-        return "This virtual machine was not found. Refresh the VM list.";
+        switch (this.operation) {
+          case "job":
+            return "No background job with this id exists in this VM. Jobs are lost when the VM is deleted.";
+          case "upload":
+            return "relativePath must name a file inside this thread's workspace, and any symlink must point inside it too.";
+          case "download":
+            return "relativePath must stay inside this thread's workspace, in a directory that exists, and must not name a symlink or a directory.";
+          default:
+            return "This virtual machine was not found. Refresh the VM list.";
+        }
       case "not-open":
-        return "Open this virtual machine in the thread before controlling it.";
+        switch (this.closedBy) {
+          case "suspend":
+            return "Someone suspended this virtual machine from the Device panel or another thread, and that ended every thread's session on it. Call device_open to resume it. Processes in the guest kept their state.";
+          case "delete":
+            return "This virtual machine was deleted. Call device_list for the machines that remain.";
+          case "disable":
+            return "Virtual machines were turned off for this environment, and that ended every session.";
+          case "close":
+            return "This thread's session on the virtual machine was closed. Call device_open again to keep using it.";
+          default:
+            return "Open this virtual machine in the thread before controlling it. Sessions are per thread and end when T3 Code restarts.";
+        }
       case "busy":
         return "A virtual machine operation is already running.";
+      case "source-running":
+        return "Suspend the source VM before cloning it. A clone copies the source's disk, which must not change during the copy.";
+      case "shared":
+        return `${this.otherThreads ?? "Other"} other thread${this.otherThreads === 1 ? " has" : "s have"} this VM open, and suspending it would end their sessions. Call device_close without shutdown, or ask the user to suspend it from the Device panel.`;
       case "already-exists":
         return "A virtual machine with this name already exists. Choose a different name.";
       case "command-failed":
@@ -177,7 +308,9 @@ export class VirtualMachineError extends Schema.TaggedError<VirtualMachineError>
           const explanation =
             this.failure === undefined
               ? "Cua reported a command failure."
-              : explanations[this.failure];
+              : this.failure === "vm-limit" && this.runningMachines?.length
+                ? `Apple allows two running macOS VMs per Mac, and these are running: ${this.runningMachines.join(", ")}. Suspend one, or ask the user which may be stopped, then retry.`
+                : explanations[this.failure];
           const reference = this.diagnosticId
             ? ` Open Diagnostics on the VM host and search its logs for Diagnostic ID: ${this.diagnosticId}.`
             : " Check the VM host's diagnostics and logs for the command output.";

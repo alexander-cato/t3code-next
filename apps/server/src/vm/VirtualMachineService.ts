@@ -4,7 +4,13 @@ import {
   type ThreadId,
   type VirtualMachineControlInput,
   type VirtualMachineCreateInput,
+  type VirtualMachineDownloadInput,
   type VirtualMachineExecInput,
+  type VirtualMachineExecResult,
+  type VirtualMachineGuest,
+  type VirtualMachineHostInventory,
+  type VirtualMachineJobInput,
+  type VirtualMachineJobResult,
   type VirtualMachineOpenInput,
   type VirtualMachineScreenshot,
   type VirtualMachineState,
@@ -60,6 +66,16 @@ const ExecReply = Schema.Struct({
   stderr: Schema.String,
   returncode: Schema.Number,
 });
+// Lume reports every VM in its store, including ones Cua and T3 did not create.
+const LumeMachine = Schema.Struct({
+  name: Schema.String,
+  status: Schema.String,
+  os: Schema.optional(Schema.NullOr(Schema.String)),
+  cpuCount: Schema.optional(Schema.NullOr(Schema.Number)),
+  memorySize: Schema.optional(Schema.NullOr(Schema.Number)),
+});
+// Apple's Virtualization framework runs at most two macOS guests per Mac.
+const MACOS_GUEST_LIMIT = 2;
 const ViewerLink = Schema.Struct({ url: Schema.String, expires_at_unix: Schema.Number });
 const ViewerVncFallback = Schema.Struct({
   name: Schema.String,
@@ -94,7 +110,7 @@ const commandFailure = (output: string): NonNullable<VirtualMachineError["failur
   )
     return "disk-space";
   if (
-    /maximum number of (?:supported )?virtual machines|(?:running|concurrent) vm limit|virtual machine limit/i.test(
+    /maximum (?:supported )?number of (?:supported |active )?virtual machines|number of virtual machines exceeds the limit|already runs \d+ macOS VMs|(?:running|concurrent) vm limit|virtual machine limit/i.test(
       text,
     )
   )
@@ -121,6 +137,51 @@ const commandFailure = (output: string): NonNullable<VirtualMachineError["failur
 const MACOS_IMAGE = "ghcr.io/trycua/macos:26-20261003-a7b1e34";
 export const VM_VIEWER_PREFIX = "/api/vm-viewer";
 
+const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+const jobDirectory = (id: string) => `"$HOME/.t3-vm-jobs/${id}"`;
+
+/** One guest command that reports what the guest can build and whether sudo needs a password. */
+const GUEST_PROBE = [
+  'echo "macos=$(sw_vers -productVersion)"',
+  'echo "cpu=$(sysctl -n hw.ncpu)"',
+  'echo "memory=$(sysctl -n hw.memsize)"',
+  "echo \"diskFreeKb=$(df -k /System/Volumes/Data 2>/dev/null | awk 'NR==2{print $4}')\"",
+  'echo "user=$(id -un)"',
+  // xcode-select points at CommandLineTools when no Xcode is installed; xcodebuild then fails.
+  'echo "xcode=$(xcodebuild -version 2>/dev/null | head -1)"',
+  'echo "swift=$(swift --version 2>/dev/null | head -1)"',
+  'echo "brew=$(command -v brew || ls /opt/homebrew/bin/brew 2>/dev/null)"',
+  'echo "sip=$(csrutil status 2>/dev/null)"',
+  'echo "sudo=$(sudo -n true 2>/dev/null && echo yes)"',
+].join("; ");
+
+export const parseGuestProbe = (stdout: string): VirtualMachineGuest | null => {
+  const facts = new Map<string, string>();
+  for (const line of stdout.split("\n")) {
+    const index = line.indexOf("=");
+    if (index > 0) facts.set(line.slice(0, index), line.slice(index + 1).trim());
+  }
+  const macos = facts.get("macos");
+  if (!macos) return null;
+  const number = (key: string, divisor: number) => {
+    const value = Number(facts.get(key));
+    return Number.isFinite(value) && value > 0 ? Math.round((value / divisor) * 10) / 10 : null;
+  };
+  const sip = facts.get("sip") ?? "";
+  return {
+    macos,
+    cpu: number("cpu", 1),
+    memoryGb: number("memory", 1024 ** 3),
+    diskFreeGb: number("diskFreeKb", 1024 ** 2),
+    user: facts.get("user") ?? "",
+    xcode: facts.get("xcode") || null,
+    swift: facts.get("swift") || null,
+    homebrew: Boolean(facts.get("brew")),
+    sipEnabled: /enabled/i.test(sip) ? true : /disabled/i.test(sip) ? false : null,
+    passwordlessSudo: facts.get("sudo") === "yes",
+  };
+};
+
 export class VirtualMachineService extends Context.Service<
   VirtualMachineService,
   {
@@ -141,7 +202,21 @@ export class VirtualMachineService extends Context.Service<
     readonly exec: (
       threadId: ThreadId,
       input: VirtualMachineExecInput,
-    ) => Effect.Effect<{ stdout: string; stderr: string; exitCode: number }, VirtualMachineError>;
+    ) => Effect.Effect<VirtualMachineExecResult, VirtualMachineError>;
+    readonly job: (
+      threadId: ThreadId,
+      input: VirtualMachineJobInput,
+    ) => Effect.Effect<VirtualMachineJobResult, VirtualMachineError>;
+    /** What the guest can build. Probed once per power cycle; null when the probe cannot run. */
+    readonly inspect: (
+      threadId: ThreadId,
+      name: string,
+    ) => Effect.Effect<VirtualMachineGuest | null, VirtualMachineError>;
+    readonly knownGuests: Effect.Effect<Readonly<Record<string, VirtualMachineGuest>>>;
+    /** Every Lume VM on this Mac, so agents can see who holds the two macOS guest slots. */
+    readonly hostInventory: Effect.Effect<VirtualMachineHostInventory, VirtualMachineError>;
+    /** Names of the other threads' sessions on this VM. A suspend closes them all. */
+    readonly otherSessions: (threadId: ThreadId, name: string) => Effect.Effect<number>;
     readonly control: (
       threadId: ThreadId,
       input: VirtualMachineControlInput,
@@ -159,6 +234,14 @@ export class VirtualMachineService extends Context.Service<
       input: VirtualMachineUploadInput,
     ) => Effect.Effect<
       void,
+      VirtualMachineError,
+      ProjectService.ProjectService | ThreadManagementService.ThreadManagementService
+    >;
+    readonly download: (
+      threadId: ThreadId,
+      input: VirtualMachineDownloadInput,
+    ) => Effect.Effect<
+      { readonly bytes: number },
       VirtualMachineError,
       ProjectService.ProjectService | ThreadManagementService.ThreadManagementService
     >;
@@ -255,6 +338,22 @@ const make = Effect.gen(function* () {
     string,
     { name: string; threadId: ThreadId; origin: string; expiresAt: number }
   >();
+  type ClosedBy = NonNullable<VirtualMachineError["closedBy"]>;
+  // Why a thread lost its session, so its next tool call can say so. Cleared on reopen.
+  const closures = new Map<string, ClosedBy>();
+  const sessionKey = (threadId: ThreadId, name: string) => `${threadId.length}:${threadId}:${name}`;
+  const recordClosures = (
+    sessions: ReadonlyArray<{ readonly name: string; readonly threadId: ThreadId }>,
+    closedBy: ClosedBy,
+  ) => {
+    for (const session of sessions) {
+      const key = sessionKey(session.threadId, session.name);
+      closures.delete(key);
+      closures.set(key, closedBy);
+    }
+    while (closures.size > 256) closures.delete(closures.keys().next().value!);
+  };
+  const guests = new Map<string, VirtualMachineGuest>();
 
   const publish = Effect.fn("VirtualMachineService.publish")(function* (
     update: (value: VirtualMachineState) => VirtualMachineState,
@@ -315,7 +414,9 @@ const make = Effect.gen(function* () {
         "screenshot",
       ].includes(args[1] ?? "")
         ? `cua sandbox ${args[1]}`
-        : "cua";
+        : operation === "inventory"
+          ? "lume ls"
+          : "cua";
     const diagnosticId = `vm-${(yield* random.uuidV4().pipe(Effect.orDie)).replaceAll("-", "").slice(0, 12)}`;
     const details = {
       operation,
@@ -538,14 +639,27 @@ const make = Effect.gen(function* () {
         (session) => session.name === name && session.threadId === threadId,
       )
     ) {
-      return yield* new VirtualMachineError({ operation: "control", reason: "not-open" });
+      const closedBy = closures.get(sessionKey(threadId, name));
+      return yield* new VirtualMachineError({
+        operation: "control",
+        reason: "not-open",
+        ...(closedBy === undefined ? {} : { closedBy }),
+      });
     }
   });
   const forget = Effect.fn("VirtualMachineService.forget")(function* (
     name: string,
-    threadId?: ThreadId,
+    threadId: ThreadId | undefined,
+    closedBy: ClosedBy,
   ) {
     const id = yield* random.uuidV4().pipe(Effect.orDie);
+    recordClosures(
+      (yield* Ref.get(state)).sessions.filter(
+        (session) =>
+          session.name === name && (threadId === undefined || session.threadId === threadId),
+      ),
+      closedBy,
+    );
     yield* disconnectGuest(name, threadId);
     for (const [id, lease] of leases)
       if (lease.name === name && (threadId === undefined || lease.threadId === threadId))
@@ -599,11 +713,92 @@ const make = Effect.gen(function* () {
     );
     if (!enabled) {
       leases.clear();
+      recordClosures((yield* Ref.get(state)).sessions, "disable");
       yield* disconnectGuest();
     }
     yield* publish((value) => ({ ...value, enabled, sessions: enabled ? value.sessions : [] }));
     return yield* list();
   });
+  const hostInventory = Effect.fn("VirtualMachineService.hostInventory")(function* () {
+    yield* requireEnabled();
+    const managed = new Set((yield* Ref.get(state)).machines.map((machine) => machine.name));
+    const args = ["ls", "--format", "json"];
+    const result = yield* runner
+      .run({ command: "lume", args, timeout: "30 seconds", maxOutputBytes: 1024 * 1024 })
+      .pipe(Effect.catch((cause) => failCommand("inventory", args, cause)));
+    if (result.code !== 0) return yield* failCommand("inventory", args, result);
+    // Lume can print a timestamped log line ahead of its JSON.
+    const machines = yield* decode(
+      Schema.Array(LumeMachine),
+      result.stdout.replace(/^\[\d{4}-\d\d-\d\dT[^\n]*\n?/gm, ""),
+    );
+    return {
+      runningLimit: MACOS_GUEST_LIMIT,
+      machines: machines
+        .filter((machine) => (machine.os ?? "macOS").toLowerCase() === "macos")
+        .map((machine) => ({
+          name: machine.name,
+          status: machine.status,
+          cpu: machine.cpuCount ?? null,
+          memoryGb:
+            machine.memorySize == null
+              ? null
+              : Math.round((machine.memorySize / 1024 ** 3) * 10) / 10,
+          managed: managed.has(machine.name),
+        })),
+    };
+  });
+  const createArgs = (input: VirtualMachineCreateInput) => [
+    "sandbox",
+    "create",
+    MACOS_IMAGE,
+    "--on",
+    "local",
+    "--kind",
+    "vm",
+    "--runtime",
+    "lume",
+    "--name",
+    input.name,
+    "--cpu",
+    String(input.cpu),
+    "--memory",
+    `${input.memoryGb}GB`,
+    "--wait",
+    "desktop",
+  ];
+  // Apple's limit counts every macOS guest on the Mac, so name the ones holding the slots.
+  const withSlotHolders = <A, R>(effect: Effect.Effect<A, VirtualMachineError, R>) =>
+    effect.pipe(
+      Effect.catchIf(
+        (error) => error.failure === "vm-limit",
+        (error) =>
+          hostInventory().pipe(
+            Effect.map((host) =>
+              host.machines
+                .filter((machine) => !["stopped", "suspended"].includes(machine.status))
+                .map((machine) => machine.name)
+                .slice(0, 8),
+            ),
+            Effect.orElseSucceed((): ReadonlyArray<string> => []),
+            Effect.flatMap((runningMachines) =>
+              Effect.fail(
+                runningMachines.length === 0
+                  ? error
+                  : new VirtualMachineError({
+                      operation: error.operation,
+                      reason: error.reason,
+                      command: error.command,
+                      exitCode: error.exitCode,
+                      failure: error.failure,
+                      diagnosticId: error.diagnosticId,
+                      runningMachines,
+                    }),
+              ),
+            ),
+          ),
+      ),
+    );
   const create = Effect.fn("VirtualMachineService.create")(function* (
     input: VirtualMachineCreateInput,
   ) {
@@ -616,6 +811,13 @@ const make = Effect.gen(function* () {
     if (current.operations.some((operation) => operation.status === "creating")) {
       return yield* new VirtualMachineError({ operation: "create", reason: "busy" });
     }
+    if (input.from !== undefined) {
+      const source = current.machines.find((machine) => machine.name === input.from);
+      if (!source)
+        return yield* new VirtualMachineError({ operation: "create", reason: "not-found" });
+      if (source.status !== "stopped")
+        return yield* new VirtualMachineError({ operation: "create", reason: "source-running" });
+    }
     yield* publish((value) => ({
       ...value,
       operations: [
@@ -623,29 +825,14 @@ const make = Effect.gen(function* () {
         { name: input.name, status: "creating", error: null },
       ],
     }));
-    yield* run(
-      "create",
-      [
-        "sandbox",
-        "create",
-        MACOS_IMAGE,
-        "--on",
-        "local",
-        "--kind",
-        "vm",
-        "--runtime",
-        "lume",
-        "--name",
-        input.name,
-        "--cpu",
-        String(input.cpu),
-        "--memory",
-        `${input.memoryGb}GB`,
-        "--wait",
-        "desktop",
-      ],
-      { timeout: "60 minutes" },
-    ).pipe(
+    // A fork restores the source's saved memory, so a clone of a suspended VM resumes its desktop.
+    const command =
+      input.from === undefined
+        ? run("create", createArgs(input), { timeout: "60 minutes" })
+        : run("create", ["sandbox", "fork", `local:${input.from}`, input.name], {
+            timeout: "10 minutes",
+          });
+    yield* withSlotHolders(command).pipe(
       Effect.andThen(() =>
         list().pipe(
           // Provisioning reached the desktop. A failed refresh must not offer creation again.
@@ -679,6 +866,7 @@ const make = Effect.gen(function* () {
       Effect.forkIn(scope),
     );
   });
+
   const requestViewer = Effect.fn("VirtualMachineService.requestViewer")(function* (name: string) {
     const result = yield* run("viewer", [
       "sandbox",
@@ -717,7 +905,9 @@ const make = Effect.gen(function* () {
     // Opens from other threads share the VM, but only one may start it.
     yield* withKeyLock(
       `start:${input.name}`,
-      run("start", ["sandbox", "resume", `local:${input.name}`], { timeout: "5 minutes" }),
+      withSlotHolders(
+        run("start", ["sandbox", "resume", `local:${input.name}`], { timeout: "5 minutes" }),
+      ),
     );
     const viewer = yield* requestViewer(input.name).pipe(
       Effect.repeat({ schedule: Schedule.spaced("2 seconds"), while: (reply) => reply === null }),
@@ -749,6 +939,7 @@ const make = Effect.gen(function* () {
       origin: new URL("../", url).toString(),
       expiresAt,
     });
+    closures.delete(sessionKey(input.threadId, input.name));
     yield* publish((value) => ({
       ...value,
       machines: value.machines.map((machine) =>
@@ -781,7 +972,9 @@ const make = Effect.gen(function* () {
       ["sandbox", remove ? "rm" : "suspend", `local:${name}`, ...(remove ? ["--force"] : [])],
       { timeout: "5 minutes" },
     );
-    yield* forget(name);
+    yield* forget(name, undefined, remove ? "delete" : "suspend");
+    // An Xcode install survives a suspend, so only a deleted guest is probed again.
+    if (remove) guests.delete(name);
     yield* publish((value) => ({
       ...value,
       machines: remove
@@ -840,6 +1033,104 @@ const make = Effect.gen(function* () {
       }),
     );
   });
+  const startJobScript = (jobId: string, command: string, cwd: string | undefined) => {
+    const directory = jobDirectory(jobId);
+    // The command goes through a file, so the guest shell never re-parses its quoting.
+    // HUP is ignored because the exec that starts the job ends at once. The exit code
+    // is renamed into place so a reader never sees a half-written file.
+    return [
+      `d=${directory}; mkdir -p "$d" || exit 1`,
+      `printf '%s\\n' ${shellQuote(command)} > "$d/command"`,
+      `( trap '' HUP; { ${cwd ? `cd ${shellQuote(cwd)} && ` : ""}sh "$d/command"; } > "$d/log" 2>&1 < /dev/null; echo $? > "$d/exit.tmp"; mv "$d/exit.tmp" "$d/exit" ) > /dev/null 2>&1 &`,
+      `echo $! > "$d/pid"; echo "$d/log"`,
+    ].join("\n");
+  };
+  const readJobScript = (jobId: string, tailBytes: number, stop: boolean) =>
+    [
+      `d=${jobDirectory(jobId)}; [ -d "$d" ] || { echo "T3JOB missing"; exit 0; }`,
+      `p=$(cat "$d/pid" 2>/dev/null)`,
+      // Stopping ends the command's whole process tree, deepest first, and leaves the
+      // wrapper alive to record the exit code.
+      ...(stop
+        ? [
+            `tree() { for c in $(pgrep -P "$1"); do tree "$c"; done; kill -TERM "$1" 2>/dev/null; }`,
+            `if [ ! -f "$d/exit" ] && [ -n "$p" ]; then for c in $(pgrep -P "$p"); do tree "$c"; done; i=0; while [ ! -f "$d/exit" ] && [ $i -lt 10 ]; do sleep 0.5; i=$((i+1)); done; [ -f "$d/exit" ] || echo 143 > "$d/exit"; fi`,
+          ]
+        : []),
+      `if [ -f "$d/exit" ]; then echo "T3JOB exited $(cat "$d/exit")"; elif [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then echo "T3JOB running"; else echo "T3JOB lost"; fi`,
+      `echo "$d/log"; tail -c ${tailBytes} "$d/log" 2>/dev/null`,
+    ].join("\n");
+  const guestShell = Effect.fn("VirtualMachineService.guestShell")(function* (
+    name: string,
+    command: string,
+    timeoutSeconds: number,
+    cwd?: string,
+  ) {
+    // The command is one argv element after `--`, so a leading hyphen is never a Cua option.
+    // Cua executes it in the guest shell; the server never interpolates it into a host shell.
+    // Cua's own default limit is shorter than ours, so the limit is always passed.
+    const result = yield* run(
+      "exec",
+      [
+        "sandbox",
+        "exec",
+        `local:${name}`,
+        "--timeout",
+        String(timeoutSeconds),
+        ...(cwd ? ["--cwd", cwd] : []),
+        "--",
+        command,
+      ],
+      { allowFailure: true, timeout: `${timeoutSeconds + 30} seconds` },
+    );
+    return yield* decode(ExecReply, result.stdout);
+  });
+  /** Resolves a workspace-relative path and refuses one that leaves the workspace. */
+  const workspacePath = Effect.fn("VirtualMachineService.workspacePath")(function* (
+    operation: string,
+    threadId: ThreadId,
+    relativePath: string,
+    target: "existing-file" | "new-file",
+  ) {
+    const storage = (cause: unknown) =>
+      new VirtualMachineError({ operation, reason: "storage", cause });
+    const outside = new VirtualMachineError({ operation, reason: "not-found" });
+    const workspace = yield* threadWorkspaceRoot(threadId);
+    if (!workspace || path.isAbsolute(relativePath)) return yield* outside;
+    const rootPath = yield* fs.realPath(workspace).pipe(Effect.mapError(storage));
+    const requested = path.resolve(rootPath, relativePath);
+    // A new file has no real path yet; its directory must exist and stay inside the workspace.
+    const resolved =
+      target === "existing-file"
+        ? yield* fs.realPath(requested).pipe(Effect.mapError(storage))
+        : path.join(
+            yield* fs.realPath(path.dirname(requested)).pipe(Effect.mapError(storage)),
+            path.basename(requested),
+          );
+    const relative = path.relative(rootPath, resolved);
+    if (
+      relative === "" ||
+      relative === ".." ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    )
+      return yield* outside;
+    const stat = yield* fs.stat(resolved).pipe(
+      Effect.map((info) => info.type),
+      Effect.catch((cause) =>
+        target === "new-file" && cause.reason._tag === "NotFound"
+          ? Effect.succeed("Missing" as const)
+          : Effect.fail(storage(cause)),
+      ),
+    );
+    // Replacing a regular file is allowed; a symlink already there could point anywhere.
+    if (target === "new-file" && stat !== "Missing") {
+      const link = yield* fs.readLink(resolved).pipe(Effect.option);
+      if (link._tag === "Some" || stat !== "File") return yield* outside;
+    }
+    if (target === "existing-file" && stat !== "File") return yield* outside;
+    return resolved;
+  });
   return VirtualMachineService.of({
     state: Ref.get(state),
     subscribe: PubSub.subscribe(changes),
@@ -855,7 +1146,7 @@ const make = Effect.gen(function* () {
       return yield* withMachine(input.name, open(input), { threadId: input.threadId });
     }),
     close: Effect.fnUntraced(function* (input) {
-      yield* withMachine(input.name, forget(input.name, input.threadId), {
+      yield* withMachine(input.name, forget(input.name, input.threadId, "close"), {
         threadId: input.threadId,
       });
     }),
@@ -881,21 +1172,74 @@ const make = Effect.gen(function* () {
     exec: Effect.fn("VirtualMachineService.exec")(
       function* (threadId, input) {
         yield* requireOpen(threadId, input.name);
-        // The command is one argv element after `--`, so a leading hyphen is never a Cua option.
-        // Cua executes it in the guest shell; the server never interpolates it into a host shell.
-        const result = yield* run(
-          "exec",
-          ["sandbox", "exec", `local:${input.name}`, "--", input.command],
-          {
-            allowFailure: true,
-            timeout: "5 minutes",
-          },
+        if (input.background) {
+          const jobId = (yield* random.uuidV4().pipe(Effect.orDie))
+            .replaceAll("-", "")
+            .slice(0, 12);
+          const reply = yield* guestShell(
+            input.name,
+            startJobScript(jobId, input.command, input.cwd),
+            60,
+          );
+          const logPath = reply.stdout.trim();
+          if (reply.returncode !== 0 || !logPath.startsWith("/"))
+            return yield* new VirtualMachineError({
+              operation: "exec",
+              reason: "invalid-response",
+            });
+          return { jobId, logPath };
+        }
+        const reply = yield* guestShell(
+          input.name,
+          input.command,
+          input.timeoutSeconds ?? 300,
+          input.cwd,
         );
-        const reply = yield* decode(ExecReply, result.stdout);
         return { stdout: reply.stdout, stderr: reply.stderr, exitCode: reply.returncode };
       },
       (effect, _threadId, input) => withMachine(input.name, effect),
     ),
+    job: Effect.fn("VirtualMachineService.job")(
+      function* (threadId, input) {
+        yield* requireOpen(threadId, input.name);
+        const reply = yield* guestShell(
+          input.name,
+          readJobScript(input.jobId, input.tailBytes ?? 16_000, input.stop ?? false),
+          60,
+        );
+        const [status = "", logPath = "", ...output] = reply.stdout.split("\n");
+        const [marker, state, code] = status.split(" ");
+        if (marker !== "T3JOB" || state === "missing")
+          return yield* new VirtualMachineError({ operation: "job", reason: "not-found" });
+        if (state !== "running" && state !== "exited" && state !== "lost")
+          return yield* new VirtualMachineError({ operation: "job", reason: "invalid-response" });
+        return {
+          state,
+          exitCode: state === "exited" && /^\d+$/.test(code ?? "") ? Number(code) : null,
+          output: output.join("\n"),
+          logPath,
+        };
+      },
+      (effect, _threadId, input) => withMachine(input.name, effect),
+    ),
+    inspect: Effect.fn("VirtualMachineService.inspect")(
+      function* (threadId, name) {
+        yield* requireOpen(threadId, name);
+        const known = guests.get(name);
+        if (known) return known;
+        const guest = parseGuestProbe((yield* guestShell(name, GUEST_PROBE, 30)).stdout);
+        if (guest) guests.set(name, guest);
+        return guest;
+      },
+      (effect, _threadId, name) => withMachine(name, effect),
+    ),
+    knownGuests: Effect.sync(() => Object.fromEntries(guests)),
+    hostInventory: hostInventory(),
+    otherSessions: Effect.fn("VirtualMachineService.otherSessions")(function* (threadId, name) {
+      return (yield* Ref.get(state)).sessions.filter(
+        (session) => session.name === name && session.threadId !== threadId,
+      ).length;
+    }),
     control: Effect.fn("VirtualMachineService.control")(
       function* (threadId, input) {
         yield* requireOpen(threadId, input.name);
@@ -976,38 +1320,38 @@ const make = Effect.gen(function* () {
     upload: Effect.fn("VirtualMachineService.upload")(
       function* (threadId, input) {
         yield* requireOpen(threadId, input.name);
-        const workspace = yield* threadWorkspaceRoot(threadId);
-        if (!workspace || path.isAbsolute(input.relativePath))
-          return yield* new VirtualMachineError({ operation: "upload", reason: "not-found" });
-        const rootPath = yield* fs
-          .realPath(workspace)
-          .pipe(
-            Effect.mapError(
-              (cause) => new VirtualMachineError({ operation: "upload", reason: "storage", cause }),
-            ),
-          );
-        const source = yield* fs
-          .realPath(path.resolve(rootPath, input.relativePath))
-          .pipe(
-            Effect.mapError(
-              (cause) => new VirtualMachineError({ operation: "upload", reason: "storage", cause }),
-            ),
-          );
-        const relative = path.relative(rootPath, source);
-        if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative))
-          return yield* new VirtualMachineError({ operation: "upload", reason: "not-found" });
-        const stat = yield* fs
-          .stat(source)
-          .pipe(
-            Effect.mapError(
-              (cause) => new VirtualMachineError({ operation: "upload", reason: "storage", cause }),
-            ),
-          );
-        if (stat.type !== "File")
-          return yield* new VirtualMachineError({ operation: "upload", reason: "not-found" });
+        const source = yield* workspacePath(
+          "upload",
+          threadId,
+          input.relativePath,
+          "existing-file",
+        );
         yield* run("upload", ["sandbox", "cp", source, `local:${input.name}:${input.guestPath}`], {
           timeout: "10 minutes",
         });
+      },
+      (effect, _threadId, input) => withMachine(input.name, effect),
+    ),
+    download: Effect.fn("VirtualMachineService.download")(
+      function* (threadId, input) {
+        yield* requireOpen(threadId, input.name);
+        const target = yield* workspacePath("download", threadId, input.relativePath, "new-file");
+        yield* run(
+          "download",
+          ["sandbox", "cp", `local:${input.name}:${input.guestPath}`, target],
+          {
+            timeout: "10 minutes",
+          },
+        );
+        const stat = yield* fs
+          .stat(target)
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new VirtualMachineError({ operation: "download", reason: "storage", cause }),
+            ),
+          );
+        return { bytes: Number(stat.size) };
       },
       (effect, _threadId, input) => withMachine(input.name, effect),
     ),

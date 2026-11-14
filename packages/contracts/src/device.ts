@@ -4,7 +4,12 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import { ThreadId, TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
 import { SettingsSecretValue } from "./settingsSecretValue.ts";
-import { VirtualMachineName, VirtualMachineState } from "./virtualMachine.ts";
+import {
+  VirtualMachineGuest,
+  VirtualMachineHostInventory,
+  VirtualMachineName,
+  VirtualMachineState,
+} from "./virtualMachine.ts";
 
 export const DevicePlatform = Schema.Literals(["ios", "android"]);
 export type DevicePlatform = typeof DevicePlatform.Type;
@@ -649,6 +654,12 @@ export const DeviceToolListResult = Schema.Struct({
       machines: VirtualMachineState.fields.machines,
       operations: VirtualMachineState.fields.operations,
       open: Schema.Array(VirtualMachineName),
+      /** Guests opened since the server started, keyed by VM name. */
+      guests: Schema.optional(Schema.Record(Schema.String, VirtualMachineGuest)),
+      /** Every macOS VM in Lume's store. Absent when Lume could not be read. */
+      host: Schema.optional(VirtualMachineHostInventory),
+      /** VM name to the number of other threads holding it open. */
+      openInOtherThreads: Schema.optional(Schema.Record(Schema.String, Schema.Number)),
     }),
   ),
 });
@@ -682,7 +693,13 @@ export const DeviceToolOpenResult = Schema.Union([
     }),
     quickStart: Schema.String,
   }),
-  Schema.Struct({ virtualMachine: VirtualMachineName, quickStart: Schema.String }),
+  Schema.Struct({
+    virtualMachine: VirtualMachineName,
+    quickStart: Schema.String,
+    /** Null when the guest did not answer the probe. */
+    guest: Schema.optional(Schema.NullOr(VirtualMachineGuest)),
+    otherThreads: Schema.optional(Schema.Number),
+  }),
 ]);
 export type DeviceToolOpenResult = typeof DeviceToolOpenResult.Type;
 

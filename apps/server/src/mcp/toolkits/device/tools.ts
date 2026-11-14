@@ -38,7 +38,7 @@ const DeviceToolFailure = Schema.Union([
 
 const DeviceListTool = Tool.make("device_list", {
   description:
-    "List iOS Simulators, Android Emulators, and macOS VMs on every device host, what each host can run, and what is open in this thread's Device panel. Call before `device_open` when you do not know a device id or VM name.",
+    "List iOS Simulators, Android Emulators, and macOS VMs on every device host, what each host can run, and what is open in this thread's Device panel. For VMs it also reports what each opened guest can build, which other threads hold a VM open, and every macOS VM in Lume's store with the two-guest running limit. Call before `device_open` when you do not know a device id or VM name.",
   // An empty struct serializes as `anyOf [object, array]`, which some
   // providers reject and then drop every tool on the server with it.
   parameters: Schema.Struct({
@@ -58,7 +58,7 @@ const DeviceListTool = Tool.make("device_list", {
 
 const DeviceOpenTool = Tool.make("device_open", {
   description:
-    "Open a simulator, emulator, or macOS VM for this thread. Pass `deviceId` and `hostId`, or `virtualMachine`, from `device_list`. Boots it if needed and shows it in the user's Device panel. Returns how to drive it: the `agent-device` CLI call pinned to a device, or the vm_* tools for a VM.",
+    "Open a simulator, emulator, or macOS VM for this thread. Pass `deviceId` and `hostId`, or `virtualMachine`, from `device_list`. Boots it if needed and shows it in the user's Device panel. Returns how to drive it: the `agent-device` CLI call pinned to a device, or the vm_* tools for a VM, with what the guest can build. To build, test or drive a macOS app, open a macOS VM and work there, not on the host Mac the user is using.",
   parameters: DeviceToolOpenInput,
   success: DeviceToolOpenResult,
   failure: DeviceToolFailure,
@@ -93,7 +93,7 @@ export const DeviceScreenshotTool = Tool.make("device_screenshot", {
 
 const DeviceCloseTool = Tool.make("device_close", {
   description:
-    "Remove a device or VM from this thread's Device panel. `shutdown=true` also turns it off.",
+    "Remove a device or VM from this thread's Device panel. `shutdown=true` also turns it off. A VM is suspended for every thread that has it open, so use it only when no other thread does.",
   parameters: DeviceToolCloseInput,
   success: Schema.Record(Schema.String, Schema.Never),
   failure: DeviceToolFailure,

@@ -174,6 +174,27 @@ are turned on. Agents still reach them only with **Agents can use devices**: the
 an ordinary device tab whose id is `device:@vm:<name>`; host ids cannot contain
 `@`, so it never collides with a device's tab.
 
+Guest commands go through `cua sandbox exec`, which holds one process open per
+command and has no detached mode. A long build would pin a host process and a
+tool call for its whole run, so `vm_exec` with `background` writes the command
+to a file under `~/.t3-vm-jobs/<id>` in the guest, starts it there, and returns.
+`vm_job` reads the pid, exit code, and log tail from that directory. The state
+lives in the guest so it survives a server restart and a suspend, and the
+server keeps no job table to lose.
+
+Sessions are per thread and VM, but a suspend or delete ends all of them. The
+service remembers why each session ended, so a thread that loses its VM to
+another client learns why on its next call. `device_list` also reads Lume's own
+store. Cua lists
+only the VMs it created, while Apple's limit of two running macOS guests counts
+every VM on the Mac, so the slot holders are visible only there. The same list
+names them when a start fails at the limit.
+
+A clone is `cua sandbox fork` from a suspended VM T3 manages. Cua copies the
+disk with APFS clonefile and restores the saved memory, so the clone is ready in
+seconds with a new machine identity. The source must be suspended because a
+running source would be copied mid-write.
+
 VM tabs stay mounted while hidden
 ([`VirtualMachineTabs`](../../apps/web/src/components/vm/VirtualMachineTabs.tsx)):
 remounting reopens the VM and restarts Cua's stream, which takes seconds where a
