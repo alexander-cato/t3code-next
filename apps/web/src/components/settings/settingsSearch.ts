@@ -1039,7 +1039,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "device-sources",
-    title: "Device sources",
+    title: "Simulator sources",
     to: "/settings/devices",
     searchTerms: [
       "device hosts ssh remote mac mini identity key connection eas expo cloud simlock pool gateway local simulators",
@@ -1049,12 +1049,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "agent-device-access",
     title: "Agents can use devices",
     to: "/settings/devices",
-    targetId: "devices",
+    targetId: "device-agents",
     searchTerms: ["allow simulator emulator ios android drive tools sessions"],
   },
   {
     id: "device-hub",
-    title: "Use devices",
+    title: "Simulators and emulators",
     to: "/settings/devices",
     targetId: "devices",
     searchTerms: ["device hub simulator emulator ios android install start version"],

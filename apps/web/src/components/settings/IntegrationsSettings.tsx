@@ -829,15 +829,12 @@ function DeviceIntegrationSettings() {
 
   return (
     <>
-      <SettingsSection id="devices" title="Devices">
-        <DeviceIntegrationControls
-          key={`${environmentId}:${JSON.stringify(search)}`}
-          environmentId={environmentId}
-          enabled={settings.enableDeviceSupport}
-          agentAccessEnabled={settings.enableAgentDeviceAccess}
-        />
-        <VirtualMachineAccessSetting />
-      </SettingsSection>
+      <DeviceIntegrationControls
+        key={`${environmentId}:${JSON.stringify(search)}`}
+        environmentId={environmentId}
+        enabled={settings.enableDeviceSupport}
+        agentAccessEnabled={settings.enableAgentDeviceAccess}
+      />
       <DeviceSourcesSettings
         supportsEas={state.supportsEasHosts === true}
         supportsSimlock={state.supportsSimlockHosts === true}
@@ -969,88 +966,93 @@ function DeviceIntegrationControls({
 
   return (
     <>
-      <SettingsRow
-        {...searchableSetting("device-hub")}
-        serverScoped
-        settingKeys={["enableDeviceSupport"]}
-        description={
-          <>
-            Open simulators and emulators in the Device panel. Hub:{" "}
-            <DeviceToolVersions
-              action={versionActions("hub")}
-              kind="hub"
-              tools={state.hosts.find((host) => host.kind === "local")?.tools}
-            />
-          </>
-        }
-        control={
-          <>
-            {pending === "hub" ? <DeviceHubSetupStatus state={state} pending compact /> : null}
-            <ScopedSwitch
-              settingKeys={["enableDeviceSupport"]}
-              checked={enabled}
-              disabled={
-                !canConfigure ||
-                projectScope ||
-                !loaded ||
-                !environmentId ||
-                busy ||
-                pending !== null
-              }
-              aria-label="Device hub"
-              onCheckedChange={(checked) =>
-                void update("hub", {
-                  enabled: Boolean(checked),
-                  ...(checked || virtualMachinesEnabled ? {} : { agentAccessEnabled: false }),
-                })
-              }
-            />
-          </>
-        }
-      />
-      <SettingsRow
-        {...searchableSetting("agent-device-access")}
-        serverScoped
-        settingKeys={["enableAgentDeviceAccess"]}
-        description={
-          <>
-            New agent sessions can open and drive these devices. agent-device:{" "}
-            <DeviceToolVersions
-              action={versionActions("agent")}
-              kind="agent"
-              tools={state.hosts.find((host) => host.kind === "local")?.tools}
-            />
-          </>
-        }
-        control={
-          <>
-            {pending === "agent" ? <AgentDeviceSetupStatus state={state} pending compact /> : null}
-            <ScopedSwitch
-              settingKeys={["enableAgentDeviceAccess"]}
-              checked={agentAccessEnabled}
-              disabled={
-                !canConfigure ||
-                connectedEnvironments.length === 0 ||
-                (!projectScope &&
-                  (!loaded || (!anyHubEnabled && !virtualMachinesEnabled) || busy)) ||
-                pending !== null
-              }
-              aria-label="Agent device access"
-              onCheckedChange={(checked) =>
-                projectScope
-                  ? updateSettings({ enableAgentDeviceAccess: Boolean(checked) })
-                  : void update("agent", { agentAccessEnabled: Boolean(checked) })
-              }
-            />
-          </>
-        }
-      />
-      {environmentId ? (
-        <DeviceHostUpdates
-          state={{ ...state, hosts: state.hosts.filter((host) => host.kind === "local") }}
-          environmentId={environmentId}
+      <SettingsSection id="devices" title="Devices">
+        <SettingsRow
+          {...searchableSetting("device-hub")}
+          serverScoped
+          settingKeys={["enableDeviceSupport"]}
+          description="Open iOS simulators and Android emulators in the Device panel."
+          status={
+            <>
+              Device hub:{" "}
+              <DeviceToolVersions action={versionActions("hub")} kind="hub" tools={localTools} />
+            </>
+          }
+          control={
+            <>
+              {pending === "hub" ? <DeviceHubSetupStatus state={state} pending compact /> : null}
+              <ScopedSwitch
+                settingKeys={["enableDeviceSupport"]}
+                checked={enabled}
+                disabled={
+                  !canConfigure ||
+                  projectScope ||
+                  !loaded ||
+                  !environmentId ||
+                  busy ||
+                  pending !== null
+                }
+                aria-label="Device hub"
+                onCheckedChange={(checked) =>
+                  void update("hub", {
+                    enabled: Boolean(checked),
+                    ...(checked || virtualMachinesEnabled ? {} : { agentAccessEnabled: false }),
+                  })
+                }
+              />
+            </>
+          }
         />
-      ) : null}
+        {environmentId ? (
+          <DeviceHostUpdates
+            state={{ ...state, hosts: state.hosts.filter((host) => host.kind === "local") }}
+            environmentId={environmentId}
+          />
+        ) : null}
+        <VirtualMachineAccessSetting />
+      </SettingsSection>
+      <SettingsSection id="device-agents" title="Agents">
+        <SettingsRow
+          {...searchableSetting("agent-device-access")}
+          serverScoped
+          settingKeys={["enableAgentDeviceAccess"]}
+          description="New agent sessions can open and drive the devices turned on above."
+          status={
+            <>
+              agent-device:{" "}
+              <DeviceToolVersions
+                action={versionActions("agent")}
+                kind="agent"
+                tools={localTools}
+              />
+            </>
+          }
+          control={
+            <>
+              {pending === "agent" ? (
+                <AgentDeviceSetupStatus state={state} pending compact />
+              ) : null}
+              <ScopedSwitch
+                settingKeys={["enableAgentDeviceAccess"]}
+                checked={agentAccessEnabled}
+                disabled={
+                  !canConfigure ||
+                  connectedEnvironments.length === 0 ||
+                  (!projectScope &&
+                    (!loaded || (!anyHubEnabled && !virtualMachinesEnabled) || busy)) ||
+                  pending !== null
+                }
+                aria-label="Agent device access"
+                onCheckedChange={(checked) =>
+                  projectScope
+                    ? updateSettings({ enableAgentDeviceAccess: Boolean(checked) })
+                    : void update("agent", { agentAccessEnabled: Boolean(checked) })
+                }
+              />
+            </>
+          }
+        />
+      </SettingsSection>
     </>
   );
 }
@@ -1097,7 +1099,7 @@ function VirtualMachineAccessSetting() {
     <SettingsRow
       serverScoped
       {...searchableSetting("virtual-machine-access")}
-      description="Run local macOS VMs on this environment through Lume and Cua. Agents control them when they can use devices. Turning this off closes VM views without deleting disks or stopping running VMs."
+      description="Run local macOS VMs on this environment through Lume and Cua. Turning this off closes VM views and keeps disks and running VMs."
       control={
         <Switch
           aria-label="Virtual machine access"
