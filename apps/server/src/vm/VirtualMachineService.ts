@@ -395,6 +395,7 @@ const make = Effect.gen(function* () {
   let inventoryRevision = 0;
   let inventoryRequest = 0;
   let publishedInventoryRequest = 0;
+  let publishedExternalRequest = 0;
   const changes = yield* PubSub.unbounded<VirtualMachineState>();
   const configurationLock = yield* TxReentrantLock.make();
   const locks = new Map<string, { semaphore: Semaphore.Semaphore; users: number }>();
@@ -758,19 +759,18 @@ const make = Effect.gen(function* () {
         adopted.has(name) ? { name, status, adopted: true } : { name, status },
       );
     return yield* publish((value) => {
-      const next = Option.match(external, {
-        onNone: () => value,
-        onSome: (all) => {
-          // An adopted VM or a Lume clone is T3's now, though Cua did not make it.
-          const entries = all.filter(
-            (entry) => !machines.some((machine) => machine.name === entry.name),
-          );
-          return sameEntries(value.external ?? [], entries)
-            ? value
-            : { ...value, external: entries };
-        },
-      });
-      if (revision !== inventoryRevision || request < publishedInventoryRequest) return next;
+      // A listing read before a create, start, adoption or removal must not undo its result.
+      if (revision !== inventoryRevision) return value;
+      let next = value;
+      if (Option.isSome(external) && request >= publishedExternalRequest) {
+        publishedExternalRequest = request;
+        // An adopted VM or a Lume clone is T3's now, though Cua did not make it.
+        const entries = external.value.filter(
+          (entry) => !machines.some((machine) => machine.name === entry.name),
+        );
+        if (!sameEntries(value.external ?? [], entries)) next = { ...value, external: entries };
+      }
+      if (request < publishedInventoryRequest) return next;
       publishedInventoryRequest = request;
       return sameEntries(next.machines, machines) ? next : { ...next, machines };
     });
@@ -1478,9 +1478,12 @@ const make = Effect.gen(function* () {
       );
     }),
     remove: Effect.fnUntraced(function* (name) {
-      yield* withMachine(name, adopted.has(name) ? release(name) : changePower(name, true), {
-        exclusive: true,
-      });
+      // Decided under the lock, so a removal queued behind an adoption sees the VM as adopted.
+      yield* withMachine(
+        name,
+        Effect.suspend(() => (adopted.has(name) ? release(name) : changePower(name, true))),
+        { exclusive: true },
+      );
     }),
     adopt: Effect.fnUntraced(function* (name) {
       return yield* TxReentrantLock.withWriteLock(configurationLock, adoptMachine(name));

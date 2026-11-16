@@ -2101,55 +2101,77 @@ it.effect("clones only a stopped VM, through a fork or Lume rather than a downlo
   ),
 );
 
+/** A host with Lume VMs outside Cua, whose Cua listing shows macos27-base once it is registered. */
+const lumeHost = Effect.fn("vm.lumeHost")(function* () {
+  let registered = (_name: string): Effect.Effect<boolean> => Effect.succeed(false);
+  // `hold` pauses the next Cua listing after it has read the host, as a slow refresh would.
+  const control: {
+    status: string;
+    hold?: { readonly entered: Deferred.Deferred<void>; readonly release: Deferred.Deferred<void> };
+  } = { status: "stopped" };
+  const base = yield* fixture({
+    lume: output(
+      json([
+        {
+          name: "macos27-base",
+          status: "stopped",
+          os: "macOS",
+          cpuCount: 8,
+          memorySize: 8 * 1024 ** 3,
+        },
+        { name: "busy-base", status: "running", os: "macOS" },
+        { name: "cua-base-1", status: "stopped", os: "macOS" },
+        { name: "ubuntu", status: "stopped", os: "linux" },
+        { name: "native-tile", status: "stopped", os: "macOS" },
+      ]),
+    ),
+    list: () =>
+      Effect.gen(function* () {
+        const adopted = yield* registered("macos27-base");
+        const reply = output(
+          json([
+            { name: "native-tile", status: "stopped", location: "local", runtime: "lume" },
+            ...(adopted
+              ? [
+                  {
+                    name: "macos27-base",
+                    status: control.status,
+                    location: "local",
+                    runtime: "lume",
+                  },
+                ]
+              : []),
+          ]),
+        );
+        const hold = control.hold;
+        delete control.hold;
+        if (hold) {
+          yield* Deferred.succeed(hold.entered, undefined);
+          yield* Deferred.await(hold.release);
+        }
+        return reply;
+      }),
+  });
+  const { fs, path, root } = base;
+  const records = path.join(root, "userdata", "virtual-machines", "cua");
+  const vmm = path.join(root, ".cua", "vmm", "lume");
+  registered = (name) =>
+    fs.exists(path.join(records, `${name}.json`)).pipe(Effect.orElseSucceed(() => false));
+  // Cua lists what it made, its cached bases included; those stay Cua's.
+  yield* fs.makeDirectory(path.join(vmm, "owned"), { recursive: true });
+  yield* fs.writeFileString(path.join(vmm, "owned", "cua-base-1.json"), "{}");
+  const hold = Effect.fn("vm.lumeHost.hold")(function* () {
+    const next = { entered: yield* Deferred.make<void>(), release: yield* Deferred.make<void>() };
+    control.hold = next;
+    return next;
+  });
+  return { ...base, control, records, vmm, hold, registered: (name: string) => registered(name) };
+});
+
 it.effect("adopts a Lume VM made outside Cua in place and only unregisters it on removal", () =>
   provide(
     Effect.gen(function* () {
-      let registered = (_name: string): Effect.Effect<boolean> => Effect.succeed(false);
-      let adoptedStatus = "stopped";
-      const { vms, calls, fs, path, root } = yield* fixture({
-        lume: output(
-          json([
-            {
-              name: "macos27-base",
-              status: "stopped",
-              os: "macOS",
-              cpuCount: 8,
-              memorySize: 8 * 1024 ** 3,
-            },
-            { name: "busy-base", status: "running", os: "macOS" },
-            { name: "cua-base-1", status: "stopped", os: "macOS" },
-            { name: "ubuntu", status: "stopped", os: "linux" },
-            { name: "native-tile", status: "stopped", os: "macOS" },
-          ]),
-        ),
-        list: () =>
-          registered("macos27-base").pipe(
-            Effect.map((adopted) =>
-              output(
-                json([
-                  { name: "native-tile", status: "stopped", location: "local", runtime: "lume" },
-                  ...(adopted
-                    ? [
-                        {
-                          name: "macos27-base",
-                          status: adoptedStatus,
-                          location: "local",
-                          runtime: "lume",
-                        },
-                      ]
-                    : []),
-                ]),
-              ),
-            ),
-          ),
-      });
-      const records = path.join(root, "userdata", "virtual-machines", "cua");
-      const vmm = path.join(root, ".cua", "vmm", "lume");
-      registered = (name) =>
-        fs.exists(path.join(records, `${name}.json`)).pipe(Effect.orElseSucceed(() => false));
-      // Cua lists what it made, its cached bases included; those stay Cua's.
-      yield* fs.makeDirectory(path.join(vmm, "owned"), { recursive: true });
-      yield* fs.writeFileString(path.join(vmm, "owned", "cua-base-1.json"), "{}");
+      const { vms, calls, fs, path, root, control, records, vmm, registered } = yield* lumeHost();
 
       expect((yield* vms.list).external).toEqual([
         { name: "busy-base", status: "running" },
@@ -2180,7 +2202,7 @@ it.effect("adopts a Lume VM made outside Cua in place and only unregisters it on
       expect(JSON.parse(yield* fs.readFileString(adoptedFile))).toEqual(["macos27-base"]);
 
       // Removing a running adopted VM suspends it and unregisters it; Lume keeps it.
-      adoptedStatus = "ready";
+      control.status = "ready";
       yield* vms.remove("macos27-base");
       expect(calls.some((call) => call.args.includes("rm"))).toBe(false);
       expect(
@@ -2196,6 +2218,38 @@ it.effect("adopts a Lume VM made outside Cua in place and only unregisters it on
       expect(
         JSON.parse(yield* fs.readFileString(path.join(records, "macos27-base.json"))).env_token,
       ).toBe(record.env_token);
+    }),
+  ),
+);
+
+it.effect("never deletes an adopted VM or loses it from both lists when calls race", () =>
+  provide(
+    Effect.gen(function* () {
+      const { vms, calls, hold } = yield* lumeHost();
+      // A removal queued behind the adoption must see the VM as adopted, not as T3's own.
+      const adopting = yield* hold();
+      const adoption = yield* vms.adopt("macos27-base").pipe(Effect.forkChild);
+      yield* Deferred.await(adopting.entered);
+      const removal = yield* vms
+        .remove("macos27-base")
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.succeed(adopting.release, undefined);
+      yield* Fiber.join(adoption);
+      yield* Fiber.join(removal);
+      expect(calls.some((call) => call.args.includes("rm"))).toBe(false);
+
+      // A refresh that read the host before a removal must not undo the removal's listing.
+      yield* vms.adopt("macos27-base");
+      const refreshing = yield* hold();
+      const refresh = yield* vms.list.pipe(Effect.forkChild);
+      yield* Deferred.await(refreshing.entered);
+      yield* vms.remove("macos27-base");
+      yield* Deferred.succeed(refreshing.release, undefined);
+      yield* Fiber.join(refresh);
+      expect((yield* vms.state).external).toContainEqual({
+        name: "macos27-base",
+        status: "stopped",
+      });
     }),
   ),
 );
