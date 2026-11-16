@@ -1123,9 +1123,11 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "browser-auto-show-floating-preview",
-    title: "Auto-show floating preview",
+    title: "Open agent previews in",
     to: "/settings/browser",
-    searchTerms: ["agent opens browser device simulator pop into view hide"],
+    searchTerms: [
+      "agent opens browser device simulator vm virtual machine floating pip picture in picture right panel tab pop into view",
+    ],
   },
   {
     id: "automatic-pull",

@@ -36,7 +36,8 @@ import { isVirtualMachineOpeningLocally } from "../vm/virtualMachinePanelSession
 
 /**
  * Shows browsers an agent or another client revealed for a thread: floating
- * over chat, or focusing an existing panel tab when the reveal is forced.
+ * over chat, focusing an existing panel tab when the reveal is forced, or as
+ * a panel tab when floating previews are off.
  */
 export function revealServerTabs(
   threadRef: ScopedThreadRef,
@@ -45,8 +46,11 @@ export function revealServerTabs(
 ): void {
   if (!readEnvironmentSupportsServerBrowser(threadRef.environmentId)) return;
   for (const session of sessions) {
+    if (!options.autoShowFloatingPreview) {
+      useRightPanelStore.getState().openBrowser(threadRef, session.tabId, true);
+      continue;
+    }
     const force = session.revealRequest?.force === true;
-    if (!options.autoShowFloatingPreview && !force) continue;
     const surface = useRightPanelStore
       .getState()
       .byThreadKey[scopedThreadKey(threadRef)]?.surfaces.find(
