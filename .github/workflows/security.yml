@@ -1,8 +1,9 @@
 name: Security
 
-# Each scan covers only what the change introduces, so upstream's existing code cannot fail every
-# nightly sync. The nightly sync dispatches this workflow on its candidate, like CI, and its merger
-# requires `Security check` to pass on the exact head.
+# Each scan covers only what the change introduces, so upstream's code cannot fail every nightly
+# sync: on a nightly candidate, that excludes what the upstream nightly it merges already has. The
+# nightly sync dispatches this workflow on its candidate, like CI, and its merger requires
+# `Security check` to pass on the exact head.
 on:
   workflow_dispatch:
     inputs:
@@ -43,6 +44,7 @@ jobs:
     outputs:
       base: ${{ steps.range.outputs.base }}
       head: ${{ steps.range.outputs.head }}
+      upstream: ${{ steps.upstream.outputs.sha }}
     steps:
       - name: Checkout
         if: github.event_name == 'workflow_dispatch'
@@ -80,6 +82,21 @@ jobs:
           done
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
           echo "head=$HEAD" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve the upstream nightly the candidate merges
+        id: upstream
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD: ${{ inputs.expected_sha }}
+        run: |
+          nightly=$(gh api "repos/$GITHUB_REPOSITORY/branches/upstream%2Fnightly" --jq .commit.sha)
+          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$nightly...$HEAD" --jq .status)
+          if ! [[ "$nightly" =~ ^[0-9a-f]{40}$ ]] || { [ "$status" != ahead ] && [ "$status" != identical ]; }; then
+            echo "::error::Candidate $HEAD does not contain upstream/nightly $nightly; rerun the nightly sync."
+            exit 1
+          fi
+          echo "sha=$nightly" >> "$GITHUB_OUTPUT"
 
   codeql:
     name: CodeQL (${{ matrix.language }})
@@ -119,15 +136,21 @@ jobs:
           upload: ${{ github.event_name == 'push' && 'always' || 'never' }}
 
       # The analyzed tree is the PR merge commit, the nightly candidate, or the pushed main commit,
-      # so diffing it against the base gives exactly the lines it adds.
+      # so diffing it against the base gives exactly the lines it adds. A nightly candidate is also
+      # diffed against its upstream nightly, and only lines both diffs add count.
       - name: Fail on high-severity results in added lines
         env:
           BASE: ${{ needs.scope.outputs.base }}
+          UPSTREAM: ${{ needs.scope.outputs.upstream }}
           RESULTS: ${{ runner.temp }}/codeql-results
         run: |
-          git fetch --no-tags --quiet --depth=1 origin "$BASE"
-          git diff -U0 --no-color --no-ext-diff "$BASE" HEAD > "$RUNNER_TEMP/introduced.diff"
-          node .github/scripts/codeql-gate.cjs "$RESULTS" "$RUNNER_TEMP/introduced.diff" 7.0
+          diffs=()
+          for ref in "$BASE" $UPSTREAM; do
+            git fetch --no-tags --quiet --depth=1 origin "$ref"
+            git diff -U0 --no-color --no-ext-diff "$ref" HEAD > "$RUNNER_TEMP/introduced-$ref.diff"
+            diffs+=("$RUNNER_TEMP/introduced-$ref.diff")
+          done
+          node .github/scripts/codeql-gate.cjs "$RESULTS" 7.0 "${diffs[@]}"
 
   dependency_review:
     name: Dependency review
@@ -176,9 +199,10 @@ jobs:
         env:
           BASE: ${{ needs.scope.outputs.base }}
           HEAD: ${{ needs.scope.outputs.head }}
+          UPSTREAM: ${{ needs.scope.outputs.upstream }}
         run: |
           "$RUNNER_TEMP/gitleaks" git --no-banner --redact --verbose \
-            --log-opts="$BASE..$HEAD" .
+            --log-opts="$BASE..$HEAD${UPSTREAM:+ ^$UPSTREAM}" .
 
   # The nightly merger requires this job. A cancelled or skipped scan must still fail it.
   security:
