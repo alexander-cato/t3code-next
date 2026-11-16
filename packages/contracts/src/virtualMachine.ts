@@ -41,6 +41,8 @@ const VirtualMachineSession = Schema.Struct({
 const VirtualMachine = Schema.Struct({
   name: VirtualMachineName,
   status: Schema.String,
+  // A Lume VM made outside T3 and registered in place. Removing it unregisters it and keeps it.
+  adopted: Schema.optionalKey(Schema.Boolean),
 });
 
 export const VirtualMachineState = Schema.Struct({
@@ -48,6 +50,10 @@ export const VirtualMachineState = Schema.Struct({
   available: Schema.Boolean,
   unavailableReason: Schema.NullOr(Schema.String),
   machines: Schema.Array(VirtualMachine),
+  // Lume VMs made outside Cua that the user can register in place with `vm.adopt`.
+  external: Schema.optionalKey(
+    Schema.Array(Schema.Struct({ name: VirtualMachineName, status: Schema.String })),
+  ),
   sessions: Schema.Array(VirtualMachineSession),
   // Explicit closes must remain distinguishable from sessions lost on server restart.
   closedSessions: Schema.optionalKey(
@@ -142,7 +148,7 @@ export const VirtualMachineHostMachine = Schema.Struct({
   status: Schema.String,
   cpu: Schema.NullOr(Schema.Number),
   memoryGb: Schema.NullOr(Schema.Number),
-  // False for Lume VMs other tools created. T3 cannot open them, but vm_create can clone a stopped one.
+  // False for Lume VMs other tools created. Agents can clone a stopped one; only the user adopts one.
   managed: Schema.Boolean,
 });
 export const VirtualMachineHostInventory = Schema.Struct({
@@ -273,6 +279,8 @@ export class VirtualMachineError extends Schema.TaggedError<VirtualMachineError>
       case "busy":
         return "A virtual machine operation is already running.";
       case "source-running":
+        if (this.operation === "adopt")
+          return "Shut this VM down in Lume first. T3 gives the guest its access token when it starts the VM.";
         return "Suspend the source VM before cloning it. A clone copies the source's disk, which must not change during the copy.";
       case "shared":
         return `${this.otherThreads ?? "Other"} other thread${this.otherThreads === 1 ? " has" : "s have"} this VM open, and suspending it would end their sessions. Call device_close without shutdown, or ask the user to suspend it from the Device panel.`;

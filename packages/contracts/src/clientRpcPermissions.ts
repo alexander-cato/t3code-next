@@ -24,6 +24,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.virtualMachineStop]: AuthOrchestrationOperateScope,
   [WS_METHODS.virtualMachineDelete]: AuthOrchestrationOperateScope,
   [WS_METHODS.virtualMachineDismiss]: AuthOrchestrationOperateScope,
+  [WS_METHODS.virtualMachineAdopt]: AuthOrchestrationOperateScope,
   [WS_METHODS.virtualMachineScreenshot]: AuthOrchestrationOperateScope,
   [WS_METHODS.providerAuthRemoveMethod]: AuthProvidersManageScope,
   [WS_METHODS.previewClose]: AuthPreviewOperateScope,

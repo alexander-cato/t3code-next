@@ -78,6 +78,16 @@ const LumeMachine = Schema.Struct({
 });
 // Apple's Virtualization framework runs at most two macOS guests per Mac.
 const MACOS_GUEST_LIMIT = 2;
+type Entry = { readonly name: string; readonly status: string; readonly adopted?: boolean };
+// Every subscribed client receives the whole state, so an unchanged list is not published.
+const sameEntries = (a: ReadonlyArray<Entry>, b: ReadonlyArray<Entry>) =>
+  a.length === b.length &&
+  a.every(
+    (entry, index) =>
+      entry.name === b[index]!.name &&
+      entry.status === b[index]!.status &&
+      entry.adopted === b[index]!.adopted,
+  );
 const ViewerTicket = Schema.Struct({ viewerPath: Schema.String, expiresAt: Schema.String });
 const McpConnection = Schema.Struct({
   url: Schema.String,
@@ -275,7 +285,10 @@ export class VirtualMachineService extends Context.Service<
       name: string,
       options?: { readonly forThread?: ThreadId },
     ) => Effect.Effect<void, VirtualMachineError>;
+    /** Deletes the VM, or for one adopted in place, suspends it and unregisters it from T3. */
     readonly remove: (name: string) => Effect.Effect<void, VirtualMachineError>;
+    /** Registers a stopped Lume VM made outside Cua, in place, so T3 can open it. */
+    readonly adopt: (name: string) => Effect.Effect<VirtualMachineState, VirtualMachineError>;
     readonly dismiss: (name: string) => Effect.Effect<void, VirtualMachineError>;
     readonly exec: (
       threadId: ThreadId,
@@ -346,6 +359,30 @@ const make = Effect.gen(function* () {
     Effect.flatMap(Schema.decodeUnknownEffect(Schema.fromJsonString(Configuration))),
     Effect.orElseSucceed(() => ({ enabled: false })),
   );
+  // Lume VMs the user registered in place. T3 never deletes these; it only unregisters them.
+  const adoptedPath = path.join(root, "adopted.json");
+  const adopted = new Set(
+    yield* fs.readFileString(adoptedPath).pipe(
+      Effect.flatMap(
+        Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(Schema.String))),
+      ),
+      Effect.orElseSucceed((): ReadonlyArray<string> => []),
+    ),
+  );
+  const writePrivate = (directory: string, file: string, contents: string) => {
+    const partial = path.join(directory, `.${file}.partial`);
+    return fs
+      .makeDirectory(directory, { recursive: true, mode: 0o700 })
+      .pipe(
+        Effect.andThen(fs.remove(partial, { force: true })),
+        Effect.andThen(fs.writeFileString(partial, contents, { flag: "wx", mode: 0o600 })),
+        Effect.andThen(fs.rename(partial, path.join(directory, file))),
+      );
+  };
+  const saveAdopted = encodeJson([...adopted].toSorted()).pipe(
+    Effect.flatMap((contents) => writePrivate(root, "adopted.json", contents)),
+  );
+  const cuaVmm = (name: string) => path.join(homeDirectory, ".cua", "vmm", "lume", name);
   const state = yield* Ref.make<VirtualMachineState>({
     enabled: saved.enabled,
     available: false,
@@ -684,7 +721,7 @@ const make = Effect.gen(function* () {
     if (platform !== "darwin" || arch !== "arm64")
       return yield* new VirtualMachineError({ operation: "access", reason: "unavailable" });
   });
-  const list = Effect.fn("VirtualMachineService.list")(function* () {
+  const list = Effect.fn("VirtualMachineService.list")(function* (withExternal = false) {
     const request = ++inventoryRequest;
     const revision = inventoryRevision;
     const available =
@@ -707,20 +744,35 @@ const make = Effect.gen(function* () {
         : { ...value, available, unavailableReason },
     );
     if (!before.enabled || !available) return before;
-    const result = yield* run("list", ["sandbox", "ls", "--local", "--no-size"]);
+    const [result, external] = yield* Effect.all(
+      [
+        run("list", ["sandbox", "ls", "--local", "--no-size"]),
+        // Lume being unreadable must not hide T3's own VMs.
+        withExternal ? externalMachines().pipe(Effect.option) : Effect.succeedNone,
+      ],
+      { concurrency: 2 },
+    );
     const machines = (yield* decode(Schema.Array(CuaMachine), result.stdout))
       .filter((machine) => machine.location === "local" && machine.runtime === "lume")
-      .map(({ name, status }) => ({ name, status }));
+      .map(({ name, status }) =>
+        adopted.has(name) ? { name, status, adopted: true } : { name, status },
+      );
     return yield* publish((value) => {
-      if (revision !== inventoryRevision || request < publishedInventoryRequest) return value;
+      const next = Option.match(external, {
+        onNone: () => value,
+        onSome: (all) => {
+          // An adopted VM or a Lume clone is T3's now, though Cua did not make it.
+          const entries = all.filter(
+            (entry) => !machines.some((machine) => machine.name === entry.name),
+          );
+          return sameEntries(value.external ?? [], entries)
+            ? value
+            : { ...value, external: entries };
+        },
+      });
+      if (revision !== inventoryRevision || request < publishedInventoryRequest) return next;
       publishedInventoryRequest = request;
-      const unchanged =
-        value.machines.length === machines.length &&
-        value.machines.every(
-          (machine, index) =>
-            machine.name === machines[index]!.name && machine.status === machines[index]!.status,
-        );
-      return unchanged ? value : { ...value, machines };
+      return sameEntries(next.machines, machines) ? next : { ...next, machines };
     });
   });
   const requireMachine = Effect.fn("VirtualMachineService.requireMachine")(function* (
@@ -821,11 +873,9 @@ const make = Effect.gen(function* () {
       yield* disconnectGuest();
     }
     yield* publish((value) => ({ ...value, enabled, sessions: enabled ? value.sessions : [] }));
-    return yield* list();
+    return yield* list(true);
   });
-  const hostInventory = Effect.fn("VirtualMachineService.hostInventory")(function* () {
-    yield* requireEnabled();
-    const managed = new Set((yield* Ref.get(state)).machines.map((machine) => machine.name));
+  const lumeMachines = Effect.fn("VirtualMachineService.lumeMachines")(function* () {
     const args = ["ls", "--format", "json"];
     const result = yield* runner
       .run({ command: "lume", args, timeout: "30 seconds", maxOutputBytes: 1024 * 1024 })
@@ -836,20 +886,38 @@ const make = Effect.gen(function* () {
       Schema.Array(LumeMachine),
       result.stdout.replace(/^\[\d{4}-\d\d-\d\dT[^\n]*\n?/gm, ""),
     );
+    return machines.filter((machine) => (machine.os ?? "macOS").toLowerCase() === "macos");
+  });
+  // Cua lists the Lume VMs it made, its cached base images included, in this folder.
+  const cuaOwned = fs.readDirectory(path.join(homeDirectory, ".cua", "vmm", "lume", "owned")).pipe(
+    Effect.map((files) => new Set(files.map((file) => file.replace(/\.json$/, "")))),
+    Effect.orElseSucceed(() => new Set<string>()),
+  );
+  const isVirtualMachineName = Schema.is(VirtualMachineName);
+  /** Lume VMs made outside Cua, which the user may adopt in place. */
+  const externalMachines = Effect.fn("VirtualMachineService.externalMachines")(function* () {
+    const [machines, owned] = yield* Effect.all([lumeMachines(), cuaOwned], { concurrency: 2 });
+    return machines
+      .filter((machine) => !owned.has(machine.name) && isVirtualMachineName(machine.name))
+      .map(({ name, status }) => ({ name, status }))
+      .toSorted((a, b) => a.name.localeCompare(b.name));
+  });
+  const hostInventory = Effect.fn("VirtualMachineService.hostInventory")(function* () {
+    yield* requireEnabled();
+    const managed = new Set((yield* Ref.get(state)).machines.map((machine) => machine.name));
+    const machines = yield* lumeMachines();
     return {
       runningLimit: MACOS_GUEST_LIMIT,
-      machines: machines
-        .filter((machine) => (machine.os ?? "macOS").toLowerCase() === "macos")
-        .map((machine) => ({
-          name: machine.name,
-          status: machine.status,
-          cpu: machine.cpuCount ?? null,
-          memoryGb:
-            machine.memorySize == null
-              ? null
-              : Math.round((machine.memorySize / 1024 ** 3) * 10) / 10,
-          managed: managed.has(machine.name),
-        })),
+      machines: machines.map((machine) => ({
+        name: machine.name,
+        status: machine.status,
+        cpu: machine.cpuCount ?? null,
+        memoryGb:
+          machine.memorySize == null
+            ? null
+            : Math.round((machine.memorySize / 1024 ** 3) * 10) / 10,
+        managed: managed.has(machine.name),
+      })),
     };
   });
   const createArgs = (input: VirtualMachineCreateInput) => [
@@ -926,17 +994,7 @@ const make = Effect.gen(function* () {
     // Cua shares this folder with the guest at every start. Its guest service takes the
     // token from there, and ports.json says the guest publishes that service. The folder
     // is created only for a clone, never for its source.
-    const vmm = path.join(homeDirectory, ".cua", "vmm", "lume", name);
-    const writePrivate = (directory: string, file: string, contents: string) => {
-      const partial = path.join(directory, `.${file}.partial`);
-      return fs
-        .makeDirectory(directory, { recursive: true, mode: 0o700 })
-        .pipe(
-          Effect.andThen(fs.remove(partial, { force: true })),
-          Effect.andThen(fs.writeFileString(partial, contents, { flag: "wx", mode: 0o600 })),
-          Effect.andThen(fs.rename(partial, path.join(directory, file))),
-        );
-    };
+    const vmm = cuaVmm(name);
     // The record goes last because it makes the clone visible to Cua and to T3.
     yield* writePrivate(path.join(vmm, "setup"), "env-token", token).pipe(
       Effect.andThen(writePrivate(vmm, "ports.json", "[3211]")),
@@ -961,6 +1019,79 @@ const make = Effect.gen(function* () {
       ),
     );
   });
+  /**
+   * Registers a Lume VM made outside Cua under its own name, with the files a clone gets.
+   * Its disk is untouched until T3 starts it; the user chose to run the original.
+   */
+  const adoptMachine = Effect.fn("VirtualMachineService.adopt")(function* (name: string) {
+    yield* requireEnabled();
+    if ((yield* list()).machines.some((machine) => machine.name === name)) return yield* list(true);
+    const [machines, owned] = yield* Effect.all([lumeMachines(), cuaOwned], { concurrency: 2 });
+    const source = machines.find((machine) => machine.name === name);
+    if (!source || owned.has(name))
+      return yield* new VirtualMachineError({ operation: "adopt", reason: "not-found" });
+    const vmm = cuaVmm(name);
+    const tokenPath = path.join(vmm, "setup", "env-token");
+    // The guest service reads its token at boot. A guest T3 suspended still holds the old one.
+    const existing = (yield* fs
+      .readFileString(tokenPath)
+      .pipe(Effect.orElseSucceed(() => ""))).trim();
+    if (source.status !== "stopped" && !(source.status === "suspended" && existing))
+      return yield* new VirtualMachineError({ operation: "adopt", reason: "source-running" });
+    const uuid = random.uuidV4().pipe(Effect.orDie);
+    const token = existing || `${yield* uuid}${yield* uuid}`.replaceAll("-", "");
+    const record = adoptedLumeRecord({
+      name,
+      cpu: source.cpuCount ?? null,
+      memoryGb:
+        source.memorySize == null ? null : Math.round((source.memorySize / 1024 ** 3) * 10) / 10,
+      token,
+      createdAt: DateTime.formatIso(yield* DateTime.now),
+    });
+    adopted.add(name);
+    // The record goes last because it makes the VM visible to Cua and to T3.
+    yield* (
+      existing ? Effect.void : writePrivate(path.join(vmm, "setup"), "env-token", token)
+    ).pipe(
+      Effect.andThen(writePrivate(vmm, "ports.json", "[3211]")),
+      Effect.andThen(saveAdopted),
+      Effect.andThen(encodeJson(record)),
+      Effect.flatMap((contents) => writePrivate(stateDir, `${name}.json`, contents)),
+      Effect.mapError(
+        (cause) => new VirtualMachineError({ operation: "adopt", reason: "storage", cause }),
+      ),
+      Effect.tapError(() =>
+        Effect.sync(() => adopted.delete(name)).pipe(Effect.andThen(saveAdopted), Effect.ignore),
+      ),
+    );
+    inventoryRevision++;
+    return yield* list(true);
+  });
+  /** Gives an adopted VM back to Lume. Its token stays, so a suspended guest can be adopted again. */
+  const release = Effect.fn("VirtualMachineService.release")(function* (name: string) {
+    const machine = yield* requireMachine(name);
+    // Cua cannot shut a guest down, so a running one is suspended before T3 lets it go.
+    if (machine.status === "running" || machine.status === "ready") yield* changePower(name, false);
+    else {
+      yield* disconnectGuest(name);
+      guestSettings.delete(name);
+    }
+    yield* forget(name, undefined, "delete");
+    yield* fs.remove(path.join(stateDir, `${name}.json`), { force: true }).pipe(
+      Effect.andThen(Effect.sync(() => adopted.delete(name))),
+      Effect.andThen(saveAdopted),
+      Effect.mapError(
+        (cause) => new VirtualMachineError({ operation: "delete", reason: "storage", cause }),
+      ),
+    );
+    guests.delete(name);
+    inventoryRevision++;
+    yield* publish((value) => ({
+      ...value,
+      machines: value.machines.filter((entry) => entry.name !== name),
+    }));
+    yield* list(true).pipe(Effect.ignore);
+  });
   const create = Effect.fn("VirtualMachineService.create")(function* (
     input: VirtualMachineCreateInput,
   ) {
@@ -973,6 +1104,13 @@ const make = Effect.gen(function* () {
     if (current.operations.some((operation) => operation.status === "creating")) {
       return yield* new VirtualMachineError({ operation: "create", reason: "busy" });
     }
+    // A VM adopted under this name was deleted outside T3; the new one is T3's to delete.
+    if (adopted.delete(input.name))
+      yield* saveAdopted.pipe(
+        Effect.mapError(
+          (cause) => new VirtualMachineError({ operation: "create", reason: "storage", cause }),
+        ),
+      );
     // A source outside Cua, such as a prepared macOS 27 base, is cloned with Lume instead.
     let lumeSource: VirtualMachineHostInventory["machines"][number] | undefined;
     if (input.from !== undefined) {
@@ -1306,7 +1444,7 @@ const make = Effect.gen(function* () {
   return VirtualMachineService.of({
     state: Ref.get(state),
     subscribe: PubSub.subscribe(changes),
-    list: list(),
+    list: list(true),
     // Lock wrappers keep the named operation spans without adding another span.
     configure: Effect.fnUntraced(function* (enabled) {
       return yield* TxReentrantLock.withWriteLock(configurationLock, configure(enabled));
@@ -1340,7 +1478,12 @@ const make = Effect.gen(function* () {
       );
     }),
     remove: Effect.fnUntraced(function* (name) {
-      yield* withMachine(name, changePower(name, true), { exclusive: true });
+      yield* withMachine(name, adopted.has(name) ? release(name) : changePower(name, true), {
+        exclusive: true,
+      });
+    }),
+    adopt: Effect.fnUntraced(function* (name) {
+      return yield* TxReentrantLock.withWriteLock(configurationLock, adoptMachine(name));
     }),
     dismiss: Effect.fn("VirtualMachineService.dismiss")(function* (name) {
       yield* requireEnabled();

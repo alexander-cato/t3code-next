@@ -574,6 +574,7 @@ it.effect.each([
   { method: WS_METHODS.virtualMachineStop, scope: AuthOrchestrationOperateScope },
   { method: WS_METHODS.virtualMachineDelete, scope: AuthOrchestrationOperateScope },
   { method: WS_METHODS.virtualMachineDismiss, scope: AuthOrchestrationOperateScope },
+  { method: WS_METHODS.virtualMachineAdopt, scope: AuthOrchestrationOperateScope },
   { method: WS_METHODS.virtualMachineScreenshot, scope: AuthOrchestrationOperateScope },
 ] as const)("guards $method against the destination environment's grant", ({ method, scope }) =>
   Effect.scoped(

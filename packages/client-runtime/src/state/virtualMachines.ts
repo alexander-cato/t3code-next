@@ -42,6 +42,10 @@ export function createVirtualMachineEnvironmentAtoms<R, E>(
       label: "environment-data:vm:dismiss",
       tag: WS_METHODS.virtualMachineDismiss,
     }),
+    adopt: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:vm:adopt",
+      tag: WS_METHODS.virtualMachineAdopt,
+    }),
     screenshot: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vm:screenshot",
       tag: WS_METHODS.virtualMachineScreenshot,
