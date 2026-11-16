@@ -52,6 +52,7 @@ import {
   browserApiCorsAllowedHeaders,
   browserApiCorsAllowedMethods,
   DESKTOP_RENDERER_ORIGINS,
+  MCP_HTTP_PATH,
 } from "./httpCors.ts";
 import { requestUrl } from "./requestUrl.ts";
 
@@ -272,10 +273,15 @@ export const layerBrowserApiCors = Layer.unwrap(
     // Guest viewers have opaque origins and their own VM-scoped credentials.
     // Their proxy owns CORS without expanding the environment API policy.
     return HttpRouter.middleware(
-      (app) =>
-        Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
-          request.url.startsWith("/api/vm-viewer/") ? app : cors(app),
-        ),
+      (httpEffect) => {
+        const withCors = cors(httpEffect);
+        return Effect.flatMap(HttpServerRequest.HttpServerRequest, (request) =>
+          request.url.split("?", 1)[0] === MCP_HTTP_PATH ||
+          request.url.startsWith("/api/vm-viewer/")
+            ? httpEffect
+            : withCors,
+        );
+      },
       { global: true },
     );
   }),

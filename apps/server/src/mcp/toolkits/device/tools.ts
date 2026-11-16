@@ -13,7 +13,7 @@ import * as Schema from "effect/Schema";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as ServerConfig from "../../../config.ts";
-import { Tool, Toolkit } from "effect/ai";
+import { McpSchema, Tool, Toolkit } from "effect/ai";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as DeviceService from "../../../device/DeviceService.ts";
@@ -54,7 +54,8 @@ const DeviceListTool = Tool.make("device_list", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, false);
+  .annotate(Tool.OpenWorld, false)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const DeviceOpenTool = Tool.make("device_open", {
   description:
@@ -67,7 +68,7 @@ const DeviceOpenTool = Tool.make("device_open", {
     FileSystem.FileSystem,
     Path.Path,
     ServerConfig.ServerConfig,
-    // The thread's project can name the EAS project a cloud device runs under.
+    // The thread's project can name the Expo project a cloud device runs under.
     ProjectService.ProjectService,
   ],
 })
@@ -75,7 +76,8 @@ const DeviceOpenTool = Tool.make("device_open", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 export const DeviceScreenshotTool = Tool.make("device_screenshot", {
   description:
@@ -89,7 +91,8 @@ export const DeviceScreenshotTool = Tool.make("device_screenshot", {
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 const DeviceCloseTool = Tool.make("device_close", {
   description:
@@ -103,7 +106,8 @@ const DeviceCloseTool = Tool.make("device_close", {
   .annotate(Tool.Readonly, false)
   .annotate(Tool.Destructive, true)
   .annotate(Tool.Idempotent, true)
-  .annotate(Tool.OpenWorld, true);
+  .annotate(Tool.OpenWorld, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.hiddenFromOutsideClients);
 
 export const DeviceStandardToolkit = Toolkit.make(DeviceListTool, DeviceOpenTool, DeviceCloseTool);
 
