@@ -235,9 +235,8 @@ nightly already has. Add a reviewed gitleaks false positive to `.gitleaksignore`
 unresolved findings. It ignores the Codex security review, which reports completion but no
 result.
 
-The existing `alexander-cato/t3code` repository continues serving installed clients during migration.
-Keep its release branches, tags, assets, and update feed intact until a signed updater transition
-has been verified. This repository's inherited deployment workflows remain disabled until their
+Installed clients update from this repository's releases; the earlier `alexander-cato/t3code` fork
+is retired. This repository's inherited deployment workflows remain disabled until their
 successors are reviewed and configured. Upstream workflow changes need their own review.
 
 ## Checks
