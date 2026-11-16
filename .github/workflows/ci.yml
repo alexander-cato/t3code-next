@@ -24,8 +24,10 @@ permissions:
   contents: read
   pull-requests: read
 
+# Keyed by event so the nightly sync's dispatched run does not cancel the PR's own run: branch
+# protection counts only the PR's run, and the nightly merger reads either.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || inputs.pull_request || github.sha }}
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pull_request || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
 
 jobs:
