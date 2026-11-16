@@ -511,6 +511,7 @@ export const WS_METHODS = {
   virtualMachineStop: "vm.stop",
   virtualMachineDelete: "vm.delete",
   virtualMachineDismiss: "vm.dismiss",
+  virtualMachineAdopt: "vm.adopt",
   virtualMachineScreenshot: "vm.screenshot",
   subscribeVirtualMachines: "subscribeVirtualMachines",
   deviceConfigure: "device.configure",
@@ -1794,6 +1795,11 @@ const WsVmDismissRpc = Rpc.make(WS_METHODS.virtualMachineDismiss, {
   payload: VirtualMachineTarget,
   error: vmRpcError,
 });
+const WsVmAdoptRpc = Rpc.make(WS_METHODS.virtualMachineAdopt, {
+  payload: VirtualMachineTarget,
+  success: VirtualMachineState,
+  error: vmRpcError,
+});
 const WsVmScreenshotRpc = Rpc.make(WS_METHODS.virtualMachineScreenshot, {
   payload: VirtualMachineOpenInput,
   success: VirtualMachineScreenshot,
@@ -2369,6 +2375,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsVmStopRpc,
   WsVmDeleteRpc,
   WsVmDismissRpc,
+  WsVmAdoptRpc,
   WsVmScreenshotRpc,
   WsSubscribeVirtualMachinesRpc,
   WsDeviceConfigureRpc,

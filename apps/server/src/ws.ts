@@ -3262,6 +3262,7 @@ export const layerWsRpc = (
         [WS_METHODS.virtualMachineStop]: (input) => virtualMachines.stop(input.name),
         [WS_METHODS.virtualMachineDelete]: (input) => virtualMachines.remove(input.name),
         [WS_METHODS.virtualMachineDismiss]: (input) => virtualMachines.dismiss(input.name),
+        [WS_METHODS.virtualMachineAdopt]: (input) => virtualMachines.adopt(input.name),
         [WS_METHODS.virtualMachineScreenshot]: (input) =>
           virtualMachines.screenshot(input.threadId, input.name),
         [WS_METHODS.subscribeVirtualMachines]: () =>
