@@ -146,9 +146,18 @@ must run Cua's guest service the way Cua's own images do; see
 [macOS 27 guests](../internals/devices.md#macos-27-guests). To change such a
 base, clone it, change the clone in T3, suspend it, and clone that from then on.
 
+You can also run such a VM itself in T3. The Device panel lists macOS VMs in
+Lume that Cua did not make under **Other Lume VMs**. Shut one down in Lume, then
+choose **Open** to add it to T3 and start it. Everything that changes inside it
+stays in that VM, so clone a base instead if you want to keep it unchanged. The
+same Local Network permission and guest service apply. Its menu offers **Remove
+from T3** instead of **Delete**: T3 suspends it if it is running and stops
+listing it as its own, and the VM stays in Lume. Agents can open it once it is
+in T3, but only you can add one.
+
 In the mobile app, the thread's **Devices** menu lists what is open and starts
 or opens any VM. The viewer can reconnect, close the thread's view, or suspend
-the VM. Create, delete, and turn VMs on from web or desktop.
+the VM. Create, delete, add Lume VMs, and turn VMs on from web or desktop.
 
 ## Remote connections
 

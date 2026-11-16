@@ -225,6 +225,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.virtualMachineStop]: "vm",
   [WS_METHODS.virtualMachineDelete]: "vm",
   [WS_METHODS.virtualMachineDismiss]: "vm",
+  [WS_METHODS.virtualMachineAdopt]: "vm",
   [WS_METHODS.virtualMachineScreenshot]: "vm",
   [WS_METHODS.subscribeVirtualMachines]: "vm",
   [WS_METHODS.deviceConfigure]: "device",

@@ -12,6 +12,7 @@ import {
   Plus,
   Power,
   Trash2,
+  Unlink,
   X,
 } from "lucide-react";
 import { useEffect, useEffectEvent, useState } from "react";
@@ -177,11 +178,13 @@ export function VirtualMachineDeviceSection(props: {
   const stop = useAtomCommand(vm.stop, { reportFailure: false });
   const remove = useAtomCommand(vm.remove, { reportFailure: false });
   const dismiss = useAtomCommand(vm.dismiss, { reportFailure: false });
+  const adopt = useAtomCommand(vm.adopt, { reportFailure: false });
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [deleteName, setDeleteName] = useState<string | null>(null);
+  const [adoptName, setAdoptName] = useState<string | null>(null);
   const failure = error ?? props.discoveryError;
   if (!supported || !state) return null;
 
@@ -215,6 +218,11 @@ export function VirtualMachineDeviceSection(props: {
       useRightPanelStore.getState().releaseVirtualMachineTabs(environmentId, machineName);
     setDeleteName(null);
   };
+  const adoptMachine = async (machineName: string) => {
+    setAdoptName(null);
+    if (await run(machineName, () => adopt({ environmentId, input: { name: machineName } })))
+      openMachine(machineName);
+  };
   const createMachine = async () => {
     if (!isValidName(name) || nameError || !canOperate) return;
     if (await run(name, () => create({ environmentId, input: { name, cpu: 4, memoryGb: 8 } }))) {
@@ -223,6 +231,9 @@ export function VirtualMachineDeviceSection(props: {
     }
   };
 
+  const external = state.external ?? [];
+  const deleteAdopted =
+    state.machines.find((machine) => machine.name === deleteName)?.adopted === true;
   const machines = state.machines
     .filter((machine) => !state.operations.some((operation) => operation.name === machine.name))
     .toSorted(
@@ -295,7 +306,9 @@ export function VirtualMachineDeviceSection(props: {
       ) : !state.available ? (
         state.unavailableReason && <LumeSetupGuide reason={state.unavailableReason} />
       ) : state.machines.length === 0 && state.operations.length === 0 ? (
-        <p className="text-xs text-muted-foreground">No macOS virtual machines yet.</p>
+        external.length === 0 && (
+          <p className="text-xs text-muted-foreground">No macOS virtual machines yet.</p>
+        )
       ) : (
         <DiscoveryList>
           {state.operations.map((operation) => {
@@ -401,7 +414,8 @@ export function VirtualMachineDeviceSection(props: {
                     <TooltipPopup>{machine.name}</TooltipPopup>
                   </Tooltip>
                   <span className="truncate text-xs text-muted-foreground">
-                    This environment · macOS · {running ? "Running" : "Stopped"}
+                    {machine.adopted ? "Lume" : "This environment"} · macOS ·{" "}
+                    {running ? "Running" : "Stopped"}
                   </span>
                 </div>
                 <Button
@@ -447,7 +461,15 @@ export function VirtualMachineDeviceSection(props: {
                       </div>
                     </MenuItem>
                     <MenuItem disabled={!canOperate} onClick={() => setDeleteName(machine.name)}>
-                      <Trash2 /> Delete VM
+                      {machine.adopted ? (
+                        <>
+                          <Unlink /> Remove from T3
+                        </>
+                      ) : (
+                        <>
+                          <Trash2 /> Delete VM
+                        </>
+                      )}
                     </MenuItem>
                   </MenuPopup>
                 </Menu>
@@ -456,6 +478,73 @@ export function VirtualMachineDeviceSection(props: {
           })}
         </DiscoveryList>
       )}
+      {state.enabled && state.available && external.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">
+            Other Lume VMs on this Mac. Opening one runs the original VM in T3.
+          </p>
+          <DiscoveryList>
+            {external.map((machine) => {
+              const openable = machine.status === "stopped" || machine.status === "suspended";
+              return (
+                <div key={machine.name} className="flex items-center gap-3 px-3 py-3">
+                  <span className="grid size-8 shrink-0 place-items-center rounded-md border border-border/60">
+                    <Monitor className="size-4" />
+                  </span>
+                  <div className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate text-sm font-medium text-foreground">
+                      {machine.name}
+                    </span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {openable
+                        ? `Lume · macOS · ${machine.status === "stopped" ? "Stopped" : "Suspended"}`
+                        : "Lume · macOS · Running outside T3. Shut it down in Lume to open it here."}
+                    </span>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!canOperate || !openable || busy !== null}
+                    aria-label={`Open ${machine.name} in T3`}
+                    onClick={() => setAdoptName(machine.name)}
+                  >
+                    {busy === machine.name ? <Spinner size="xs" /> : <ArrowUpRight />}
+                    Open
+                  </Button>
+                </div>
+              );
+            })}
+          </DiscoveryList>
+        </div>
+      )}
+      <AlertDialog
+        open={adoptName !== null}
+        onOpenChange={(value) => {
+          if (!value) setAdoptName(null);
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Open {adoptName} in T3?</AlertDialogTitle>
+            <AlertDialogDescription>
+              T3 starts this VM itself, so anything that changes inside it stays in this VM. Its
+              desktop appears only if Cua's guest service is installed in it. Remove it from T3
+              later to hand it back to Lume; T3 never deletes it.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <Button
+              disabled={busy !== null}
+              onClick={() => {
+                if (adoptName) void adoptMachine(adoptName);
+              }}
+            >
+              Open in T3
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
       <Dialog open={creating} onOpenChange={setCreating}>
         <WizardPopup>
           <form
@@ -528,21 +617,25 @@ export function VirtualMachineDeviceSection(props: {
       >
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete {deleteName}?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {deleteAdopted ? `Remove ${deleteName} from T3?` : `Delete ${deleteName}?`}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              This permanently removes the virtual machine and all files inside it.
+              {deleteAdopted
+                ? "T3 stops managing this VM and suspends it if it's running. The VM and its files stay in Lume."
+                : "This permanently removes the virtual machine and all files inside it."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
             <Button
-              variant="destructive"
+              variant={deleteAdopted ? "default" : "destructive"}
               disabled={busy !== null}
               onClick={() => {
                 if (deleteName) void deleteMachine(deleteName);
               }}
             >
-              Delete VM
+              {deleteAdopted ? "Remove from T3" : "Delete VM"}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>
