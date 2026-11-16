@@ -2175,6 +2175,9 @@ it.effect("adopts a Lume VM made outside Cua in place and only unregisters it on
       expect(record).toMatchObject({ name: "macos27-base", cpu_count: 8, memory_mb: 8192 });
       const token = path.join(vmm, "macos27-base", "setup", "env-token");
       expect(yield* fs.readFileString(token)).toBe(record.env_token);
+      // T3 must still know after a restart that this VM is the user's, never its own to delete.
+      const adoptedFile = path.join(root, "userdata", "virtual-machines", "adopted.json");
+      expect(JSON.parse(yield* fs.readFileString(adoptedFile))).toEqual(["macos27-base"]);
 
       // Removing a running adopted VM suspends it and unregisters it; Lume keeps it.
       adoptedStatus = "ready";
@@ -2184,6 +2187,7 @@ it.effect("adopts a Lume VM made outside Cua in place and only unregisters it on
         calls.filter((call) => call.args.includes("suspend")).map((call) => call.args.at(-1)),
       ).toEqual(["local:macos27-base"]);
       expect(yield* registered("macos27-base")).toBe(false);
+      expect(JSON.parse(yield* fs.readFileString(adoptedFile))).toEqual([]);
       const after = yield* vms.list;
       expect(after.machines.map((machine) => machine.name)).toEqual(["native-tile"]);
       expect(after.external).toContainEqual({ name: "macos27-base", status: "stopped" });

@@ -379,7 +379,7 @@ const make = Effect.gen(function* () {
         Effect.andThen(fs.rename(partial, path.join(directory, file))),
       );
   };
-  const saveAdopted = encodeJson([...adopted].toSorted()).pipe(
+  const saveAdopted = Effect.suspend(() => encodeJson([...adopted].toSorted())).pipe(
     Effect.flatMap((contents) => writePrivate(root, "adopted.json", contents)),
   );
   const cuaVmm = (name: string) => path.join(homeDirectory, ".cua", "vmm", "lume", name);
