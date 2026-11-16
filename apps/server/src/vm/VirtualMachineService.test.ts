@@ -43,6 +43,15 @@ const output = (stdout: string, code = 0): ProcessRunner.ProcessRunOutput => ({
   stderrInvalidUtf8: false,
 });
 
+const ticket = (viewerPath: string) =>
+  output(
+    json({ viewerPath, expiresAt: "2286-11-20T17:46:39Z", ticket: "t", filesRoot: "/Users/lume" }),
+  );
+// cua-spacesd is not answering yet.
+const spacesdStarting = output("connection refused", 1);
+const viewerCalls = (calls: ReadonlyArray<ProcessRunner.ProcessRunInput>) =>
+  calls.filter((call) => call.args.includes("SystemService/CreateViewerTicket"));
+
 const fixture = Effect.fn("vm.fixture")(function* (options?: {
   readonly enabled?: boolean;
   readonly machines?: ReadonlyArray<string>;
@@ -198,14 +207,9 @@ const fixture = Effect.fn("vm.fixture")(function* (options?: {
                 : { content: [{ type: "text", text: "done" }] },
             ),
           );
-        case "view":
+        case "call":
           if (options?.view) return yield* options.view(++viewCount);
-          return output(
-            json({
-              url: `${origin}/viewer/#ticket=guest-view-ticket`,
-              expires_at_unix: 9999999999,
-            }),
-          );
+          return ticket("/viewer/#ticket=guest-view-ticket");
         case "resume":
           if (options?.resume)
             return Effect.isEffect(options.resume) ? yield* options.resume : options.resume;
@@ -316,10 +320,14 @@ it.effect(
         const { vms, calls } = yield* fixture();
         const viewer = yield* vms.open({ name: "native-tile", threadId });
         expect(viewer.viewerPath).toMatch(
-          /^\/api\/vm-viewer\/[^/]+\/viewer\/#ticket=guest-view-ticket$/,
+          /^\/api\/vm-viewer\/[^/]+\/viewer\/#ticket=guest-view-ticket&clipboard=view$/,
         );
         expect(calls.some((call) => call.args.includes("resume"))).toBe(true);
-        expect(calls.find((call) => call.args.includes("view"))?.args).toContain("--no-open");
+        const [minted] = viewerCalls(calls);
+        expect(minted?.args).toContain("http://192.168.64.2:3211/");
+        expect(minted?.env?.CUA_ENV_TOKEN).toBe("guest-root-secret");
+        expect(json(minted?.args)).not.toContain("secret");
+        expect(calls.some((call) => call.args.includes("view"))).toBe(false);
         expect(yield* vms.state).toMatchObject({ sessions: [{ name: "native-tile", threadId }] });
         expect(json(yield* vms.state)).not.toContain("secret");
         expect(json(yield* vms.state)).not.toContain("ticket");
@@ -341,19 +349,53 @@ it.effect.each(["ready", "running"])(
           view: (): Effect.Effect<ProcessRunner.ProcessRunOutput> =>
             Effect.succeed(
               calls.some((call) => call.args.includes("resume"))
-                ? output(
-                    json({
-                      url: "http://192.168.64.2:3211/viewer/#ticket=guest-view-ticket",
-                      expires_at_unix: 9999999999,
-                    }),
-                  )
-                : output("Guest is stopped", 1),
+                ? ticket("/viewer/#ticket=guest-view-ticket")
+                : spacesdStarting,
             ),
         });
         yield* vms.open({ name: "native-tile", threadId });
         expect((yield* vms.state).sessions).toEqual([{ name: "native-tile", threadId }]);
       }),
     ),
+);
+
+it.effect.each(["ready", "running"])(
+  "opens a %s guest whose desktop is up without resuming it",
+  (status) =>
+    provide(
+      Effect.gen(function* () {
+        const { vms, calls } = yield* fixture({ status });
+        yield* vms.open({ name: "native-tile", threadId });
+        expect(calls.some((call) => call.args.includes("resume"))).toBe(false);
+        expect((yield* vms.state).sessions).toEqual([{ name: "native-tile", threadId }]);
+      }),
+    ),
+);
+
+it.effect("reads a running guest's address once, and again after a failed mint or a restart", () =>
+  provide(
+    Effect.gen(function* () {
+      let failNext = false;
+      const { vms, calls } = yield* fixture({
+        status: "ready",
+        view: () => {
+          const failed = failNext;
+          failNext = false;
+          return Effect.succeed(failed ? spacesdStarting : ticket("/viewer/#ticket=t"));
+        },
+      });
+      const reads = () => calls.filter((call) => call.args.includes("config")).length;
+      yield* vms.open({ name: "native-tile", threadId });
+      yield* vms.open({ name: "native-tile", threadId });
+      expect(reads()).toBe(1);
+      failNext = true;
+      yield* vms.open({ name: "native-tile", threadId });
+      expect(reads()).toBe(2);
+      yield* vms.stop("native-tile");
+      yield* vms.open({ name: "native-tile", threadId });
+      expect(reads()).toBe(3);
+    }),
+  ),
 );
 
 it.effect.each([
@@ -400,7 +442,6 @@ it.effect.each([
         const privateOutput =
           "/Users/example/private Bearer guest-secret https://guest.test/?ticket=private-ticket";
         const { vms, calls } = yield* fixture({
-          status: "ready",
           resume: { ...output(privateOutput, 17), stderr: `${stderr}\n${privateOutput}` },
         });
         const error = yield* vms.open({ name: "native-tile", threadId }).pipe(Effect.flip);
@@ -422,7 +463,7 @@ it.effect.each([
           "private-ticket",
         ])
           expect(json(encoded)).not.toContain(privateText);
-        expect(calls.some((call) => call.args.includes("view"))).toBe(false);
+        expect(viewerCalls(calls)).toHaveLength(0);
         expect((yield* vms.state).sessions).toEqual([]);
       }),
     ),
@@ -464,49 +505,23 @@ it.effect.each([
   ),
 );
 
-it.effect("waits for the HTTP viewer after resume returns a VNC fallback", () =>
+it.effect("waits for the desktop while cua-spacesd starts after resume", () =>
   provide(
     Effect.gen(function* () {
       const starting = yield* Deferred.make<void>();
       const { vms, calls } = yield* fixture({
         view: (count) =>
           count === 1
-            ? Deferred.succeed(starting, undefined).pipe(
-                Effect.as(
-                  output(
-                    json({
-                      name: "local:native-tile",
-                      open_command: ["/opt/homebrew/bin/lume", "attach", "native-tile"],
-                      opened: false,
-                      url: "vnc://192.168.64.2:5900",
-                      via: "vnc",
-                    }),
-                  ),
-                ),
-              )
-            : Effect.succeed(
-                output(
-                  json({
-                    url: "http://192.168.64.2:3211/viewer/#ticket=ready",
-                    expires_at_unix: 9999999999,
-                  }),
-                ),
-              ),
+            ? Deferred.succeed(starting, undefined).pipe(Effect.as(spacesdStarting))
+            : Effect.succeed(ticket("/viewer/#ticket=ready")),
       });
       const opening = yield* vms.open({ name: "native-tile", threadId }).pipe(Effect.forkChild);
       yield* Deferred.await(starting);
       expect((yield* vms.state).sessions).toEqual([]);
       yield* TestClock.adjust("2 seconds");
       const viewer = yield* Fiber.join(opening);
-      expect(viewer.viewerPath).toMatch(/\/viewer\/#ticket=ready$/);
-      expect(calls.filter((call) => call.args.includes("view"))).toHaveLength(2);
-      expect(calls.every((call) => call.command === "cua")).toBe(true);
-      expect(
-        calls
-          .filter((call) => call.args.includes("view"))
-          .every((call) => call.args.includes("--no-open")),
-      ).toBe(true);
-      expect(calls.some((call) => call.args.includes("attach"))).toBe(false);
+      expect(viewer.viewerPath).toMatch(/\/viewer\/#ticket=ready&clipboard=view$/);
+      expect(viewerCalls(calls)).toHaveLength(2);
     }),
   ),
 );
@@ -516,20 +531,7 @@ it.effect("bounds desktop startup waiting and leaves no viewer session on timeou
     Effect.gen(function* () {
       const starting = yield* Deferred.make<void>();
       const { vms, calls } = yield* fixture({
-        view: () =>
-          Deferred.succeed(starting, undefined).pipe(
-            Effect.as(
-              output(
-                json({
-                  name: "local:native-tile",
-                  open_command: ["/opt/homebrew/bin/lume", "attach", "native-tile"],
-                  opened: false,
-                  url: "vnc://192.168.64.2:5900",
-                  via: "vnc",
-                }),
-              ),
-            ),
-          ),
+        view: () => Deferred.succeed(starting, undefined).pipe(Effect.as(spacesdStarting)),
       });
       const opening = yield* vms
         .open({ name: "native-tile", threadId })
@@ -542,7 +544,7 @@ it.effect("bounds desktop startup waiting and leaves no viewer session on timeou
       expect(error.message).toContain("reconnect");
       expect(error.message).not.toContain("Update Cua");
       expect((yield* vms.state).sessions).toEqual([]);
-      expect(calls.filter((call) => call.args.includes("view")).length).toBeLessThanOrEqual(61);
+      expect(viewerCalls(calls).length).toBeLessThanOrEqual(61);
     }),
   ),
 );
@@ -556,7 +558,7 @@ it.effect("rejects malformed viewer responses without retrying", () =>
       expect((yield* vms.open({ name: "native-tile", threadId }).pipe(Effect.flip)).reason).toBe(
         "invalid-response",
       );
-      expect(calls.filter((call) => call.args.includes("view"))).toHaveLength(1);
+      expect(viewerCalls(calls)).toHaveLength(1);
     }),
   ),
 );
@@ -565,15 +567,12 @@ it.effect("still rejects HTTP viewers without a ticket", () =>
   provide(
     Effect.gen(function* () {
       const { vms, calls } = yield* fixture({
-        view: () =>
-          Effect.succeed(
-            output(json({ url: "http://192.168.64.2:3211/viewer/", expires_at_unix: 9999999999 })),
-          ),
+        view: () => Effect.succeed(ticket("/viewer/#files=%2FUsers%2Flume")),
       });
       expect((yield* vms.open({ name: "native-tile", threadId }).pipe(Effect.flip)).reason).toBe(
         "invalid-response",
       );
-      expect(calls.filter((call) => call.args.includes("view"))).toHaveLength(1);
+      expect(viewerCalls(calls)).toHaveLength(1);
     }),
   ),
 );
@@ -623,13 +622,10 @@ it.effect("pins guest commands to an open thread and preserves command exit code
       ]);
       expect(calls.at(-1)?.timeout).toBe("1830 seconds");
       yield* vms.control(threadId, { name: "native-tile", tool: "drag", arguments: { x: 10 } });
-      expect(calls.at(-1)?.args.slice(4)).toEqual([
-        "sandbox",
-        "mcp",
-        "local:native-tile",
-        "env",
-        "config",
-        "--show-secrets",
+      // Control reuses the guest address the open read.
+      const configReads = calls.filter((call) => call.args.includes("config"));
+      expect(configReads.map((call) => call.args.slice(4))).toEqual([
+        ["sandbox", "mcp", "local:native-tile", "env", "config", "--show-secrets"],
       ]);
       expect(requests.at(-1)).toMatchObject({
         method: "tools/call",
@@ -637,8 +633,7 @@ it.effect("pins guest commands to an open thread and preserves command exit code
         params: { name: "drag", arguments: { x: 10 } },
       });
       expect(json(yield* vms.state)).not.toContain("guest-root-secret");
-      expect(calls.at(-1)?.args).not.toContain("guest-root-secret");
-      expect(calls.at(-1)?.env).toBeUndefined();
+      expect(configReads[0]?.env).toBeUndefined();
     }),
   ),
 );
@@ -1183,28 +1178,13 @@ it.effect("opens another VM in the same thread while a desktop is still starting
         view: (count) =>
           count === 1
             ? Deferred.succeed(starting, undefined).pipe(Effect.andThen(Deferred.await(finish)))
-            : Effect.succeed(
-                output(
-                  json({
-                    url: "http://192.168.64.2:3211/viewer/#ticket=second",
-                    expires_at_unix: 9999999999,
-                  }),
-                ),
-              ),
+            : Effect.succeed(ticket("/viewer/#ticket=second")),
       });
       const opening = yield* vms.open({ name: "native-tile", threadId }).pipe(Effect.forkChild);
       yield* Deferred.await(starting);
       const second = yield* vms.open({ name: "second-vm", threadId });
       expect(second.name).toBe("second-vm");
-      yield* Deferred.succeed(
-        finish,
-        output(
-          json({
-            url: "http://192.168.64.2:3211/viewer/#ticket=first",
-            expires_at_unix: 9999999999,
-          }),
-        ),
-      );
+      yield* Deferred.succeed(finish, ticket("/viewer/#ticket=first"));
       yield* Fiber.join(opening);
     }),
   ),
@@ -1612,9 +1592,7 @@ it.effect("an agent's suspend counts a thread whose open is still waiting for it
     Effect.gen(function* () {
       const starting = yield* Deferred.make<void>();
       const finish = yield* Deferred.make<void>();
-      const viewer = output(
-        json({ url: "http://192.168.64.2:3211/viewer/#ticket=t", expires_at_unix: 9999999999 }),
-      );
+      const viewer = ticket("/viewer/#ticket=t");
       const { vms, calls } = yield* fixture({
         view: (count) =>
           count === 1
