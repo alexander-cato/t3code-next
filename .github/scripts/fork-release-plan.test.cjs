@@ -9,8 +9,7 @@ function fixture() {
     protected: true,
     verified: true,
     latest: "success",
-    current: [],
-    legacy: [{ tag_name: "v0.1.10-nightly.20261114.391" }],
+    current: [{ tag_name: "v0.1.10-nightly.20261114.391" }],
     ancestry: "ahead",
   };
   const github = {
@@ -59,7 +58,7 @@ function fixture() {
         }),
       },
     },
-    paginate: async (_method, params) => (params.repo === "t3code" ? state.legacy : state.current),
+    paginate: async () => state.current,
   };
   const context = {
     repo: { owner: "alexander-cato", repo: "t3code-next" },
@@ -92,7 +91,7 @@ test("version increases across old and successor releases, including drafts and 
   );
 });
 
-test("accepts a verified normal GitHub merge commit, pins main, and uses both release histories", async () => {
+test("accepts a verified normal GitHub merge commit, pins main, and continues the release history", async () => {
   const input = fixture();
   assert.deepEqual(await resolveRelease(input), {
     build: true,
@@ -103,6 +102,11 @@ test("accepts a verified normal GitHub merge commit, pins main, and uses both re
   });
   input.state.ref = previous;
   assert.equal((await resolveRelease(input)).build, false);
+  // With no releases here yet, versions still continue above the retired fork's last release.
+  const fresh = fixture();
+  fresh.state.current = [];
+  fresh.now = new Date("2026-11-12T10:00:00Z");
+  assert.equal((await resolveRelease(fresh)).version, "0.1.10-nightly.20261112.392");
 });
 
 test("rejects an unsigned commit, unprotected main, failed latest CI, and untrusted workflow events", async () => {
@@ -129,7 +133,7 @@ test("rejects an unsigned commit, unprotected main, failed latest CI, and untrus
   await assert.rejects(resolveRelease(input), /protected main branch/);
 });
 
-test("refuses release rollback and fails closed when legacy history cannot be read", async () => {
+test("refuses release rollback and fails closed when release history cannot be read", async () => {
   const input = fixture();
   input.state.current = [
     {

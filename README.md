@@ -6,7 +6,7 @@
 
 <h1 align="center">T3 Code</h1>
 
-This is Alexander Cato's personal distribution of [T3 Code](https://github.com/pingdotgg/t3code), currently being migrated through reviewed PRs into `main`. During migration, continue using the [existing fork's releases](https://github.com/alexander-cato/t3code/releases). The upstream installation instructions below do not install this personal distribution.
+This is Alexander Cato's personal distribution of [T3 Code](https://github.com/pingdotgg/t3code). Install it from this repository's [releases](https://github.com/alexander-cato/t3code-next/releases). The upstream installation instructions below do not install this personal distribution.
 
 <p align="center">The open-source control plane for coding agents.</p>
 

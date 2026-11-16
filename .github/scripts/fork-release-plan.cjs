@@ -13,6 +13,9 @@ function compareVersion(left, right) {
   return 0;
 }
 
+// The retired alexander-cato/t3code fork published up to this tag; versions continue above it.
+const RETIRED_FORK_LAST_RELEASE = { tag_name: "v0.1.10-nightly.20261112.391" };
+
 function nextVersion(packageVersion, releases, now = new Date()) {
   if (!/^\d+\.\d+\.\d+$/.test(packageVersion))
     throw new Error("Expected a stable package version.");
@@ -94,11 +97,6 @@ async function resolveRelease({ github, context, force = false, now = new Date()
     ...repository,
     per_page: 100,
   });
-  const legacy = await github.paginate(github.rest.repos.listReleases, {
-    owner: "alexander-cato",
-    repo: "t3code",
-    per_page: 100,
-  });
   const previous = current
     .filter((release) => !release.draft && release.published_at && parseNightly(release.tag_name))
     .sort((a, b) => compareVersion(parseNightly(b.tag_name), parseNightly(a.tag_name)))[0];
@@ -130,7 +128,7 @@ async function resolveRelease({ github, context, force = false, now = new Date()
     throw new Error("Invalid desktop package manifest.");
   const version = nextVersion(
     JSON.parse(Buffer.from(manifest.content, "base64").toString("utf8")).version,
-    [...current, ...legacy, { tag_name: "v0.1.10-nightly.20261112.346" }],
+    [...current, RETIRED_FORK_LAST_RELEASE],
     now,
   );
   return { build: true, ref, previousRef, version, tag: `v${version}` };
