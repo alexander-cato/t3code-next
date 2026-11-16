@@ -78,15 +78,7 @@ const LumeMachine = Schema.Struct({
 });
 // Apple's Virtualization framework runs at most two macOS guests per Mac.
 const MACOS_GUEST_LIMIT = 2;
-const ViewerLink = Schema.Struct({ url: Schema.String, expires_at_unix: Schema.Number });
-const ViewerVncFallback = Schema.Struct({
-  name: Schema.String,
-  opened: Schema.Literal(false),
-  url: Schema.String,
-  via: Schema.Literal("vnc"),
-  open_command: Schema.Array(Schema.String),
-});
-const ViewerReply = Schema.Union([ViewerLink, ViewerVncFallback]);
+const ViewerTicket = Schema.Struct({ viewerPath: Schema.String, expiresAt: Schema.String });
 const McpConnection = Schema.Struct({
   url: Schema.String,
   headers: Schema.Record(Schema.String, Schema.String),
@@ -527,13 +519,15 @@ const make = Effect.gen(function* () {
     options?: {
       readonly timeout?: Duration.Input;
       readonly allowFailure?: boolean;
+      readonly env?: Record<string, string>;
     },
   ) {
+    const base = yield* childEnvironment();
     const result = yield* runner
       .run({
         command: "cua",
         args: ["--embedded", "--state-dir", stateDir, "--json", ...args],
-        env: yield* childEnvironment(),
+        env: options?.env ? { ...(base ?? environment), ...options.env } : base,
         timeout: options?.timeout ?? "60 seconds",
         maxOutputBytes: 8 * 1024 * 1024,
       })
@@ -572,13 +566,19 @@ const make = Effect.gen(function* () {
       yield* publish((value) => ({ ...value, sessions: [] }));
     }),
   );
-  const guestClient = Effect.fn("VirtualMachineService.guestClient")(function* (
-    threadId: ThreadId,
+  // A running guest keeps its address and token, and Cua takes seconds to read them.
+  // Starting, suspending or deleting a VM, or a call they fail, drops them.
+  const guestSettings = new Map<string, typeof McpConnection.Type>();
+  // A broken transport may mean the guest restarted with a new address or token.
+  const evictGuest = (name: string, threadId: ThreadId) =>
+    disconnectGuest(name, threadId).pipe(
+      Effect.andThen(Effect.sync(() => guestSettings.delete(name))),
+    );
+  const guestEnvironment = Effect.fn("VirtualMachineService.guestEnvironment")(function* (
     name: string,
   ) {
-    const key = `${threadId.length}:${threadId}:${name}`;
-    const existing = guestConnections.get(key);
-    if (existing) return existing;
+    const cached = guestSettings.get(name);
+    if (cached) return cached;
     const connection = yield* run("connect", [
       "sandbox",
       "mcp",
@@ -588,6 +588,17 @@ const make = Effect.gen(function* () {
       "--show-secrets",
     ]);
     const settings = yield* decode(McpConnection, connection.stdout);
+    guestSettings.set(name, settings);
+    return settings;
+  });
+  const guestClient = Effect.fn("VirtualMachineService.guestClient")(function* (
+    threadId: ThreadId,
+    name: string,
+  ) {
+    const key = `${threadId.length}:${threadId}:${name}`;
+    const existing = guestConnections.get(key);
+    if (existing) return existing;
+    const settings = yield* guestEnvironment(name);
     const connectionScope = yield* Scope.fork(scope, "sequential");
     // Cua ends lifecycle sessions and invalidates AX tokens when an MCP transport
     // closes. Keep its negotiated transport ID private and reuse it for this thread and VM.
@@ -645,7 +656,11 @@ const make = Effect.gen(function* () {
     }).pipe(
       Effect.provideService(Scope.Scope, connectionScope),
       Effect.timeout("60 seconds"),
-      Effect.onError(() => Scope.close(connectionScope, Exit.void)),
+      Effect.onError(() =>
+        Scope.close(connectionScope, Exit.void).pipe(
+          Effect.andThen(Effect.sync(() => guestSettings.delete(name))),
+        ),
+      ),
       Effect.mapError((cause) =>
         isVirtualMachineError(cause)
           ? cause
@@ -1026,66 +1041,83 @@ const make = Effect.gen(function* () {
   });
 
   const requestViewer = Effect.fn("VirtualMachineService.requestViewer")(function* (name: string) {
-    const result = yield* run("viewer", [
-      "sandbox",
-      "view",
-      `local:${name}`,
-      "--no-open",
-      "--ttl",
-      "1h",
-    ]);
-    const link = yield* decode(ViewerReply, result.stdout);
-    const url = yield* Effect.try({
-      try: () => new URL(link.url),
+    // `cua sandbox view` reads the Space's clipboard setting from a listing that waits 30s
+    // for Cua's daemon, which embedded mode never starts. This mints the same ticket directly.
+    const guest = yield* guestEnvironment(name);
+    const origin = yield* Effect.try({
+      try: () => new URL("/", guest.url),
       catch: (cause) =>
         new VirtualMachineError({ operation: "viewer", reason: "invalid-response", cause }),
     });
-    // Cua falls back to host VNC while cua-spacesd boots. Never run open_command.
-    if ("via" in link) {
-      if (link.name !== `local:${name}` || url.protocol !== "vnc:" || !url.hostname)
-        return yield* new VirtualMachineError({ operation: "viewer", reason: "invalid-response" });
+    const token = guest.headers["x-cua-env-authorization"]?.replace(/^Bearer /, "");
+    if (origin.protocol !== "http:" || origin.username || origin.password || !token)
+      return yield* new VirtualMachineError({ operation: "viewer", reason: "invalid-response" });
+    // Cua's own defaults for a local Space with no clipboard setting.
+    const minted = yield* run(
+      "viewer",
+      [
+        "spacesd",
+        "call",
+        origin.toString(),
+        "SystemService/CreateViewerTicket",
+        '{"ttl":"3600s","policy":"SESSION_POLICY_ALLOW_ACTIVATION","clipboard":true,"filesRoot":"~"}',
+      ],
+      { env: { CUA_ENV_TOKEN: token }, allowFailure: true },
+    );
+    // cua-spacesd is still booting, or the guest restarted with a new token.
+    if (minted.code !== 0) {
+      guestSettings.delete(name);
       return null;
     }
+    const ticket = yield* decode(ViewerTicket, minted.stdout);
+    const url = new URL(`${ticket.viewerPath}&clipboard=view`, origin);
+    const expiresAt = Date.parse(ticket.expiresAt);
     if (
-      url.protocol !== "http:" ||
-      url.username ||
-      url.password ||
+      url.origin !== origin.origin ||
       !url.pathname.endsWith("/viewer/") ||
-      !new URLSearchParams(url.hash.slice(1)).get("ticket")
+      !new URLSearchParams(url.hash.slice(1)).get("ticket") ||
+      !Number.isFinite(expiresAt)
     )
       return yield* new VirtualMachineError({ operation: "viewer", reason: "invalid-response" });
-    return { link, url };
+    return { url, expiresAt };
   });
   const open = Effect.fn("VirtualMachineService.open")(function* (input: VirtualMachineOpenInput) {
-    yield* requireMachine(input.name);
-    // Cua's saved ready status survives host restarts. Resume checks Lume and
-    // leaves an already running guest and its control sessions intact.
+    const machine = yield* requireMachine(input.name);
     // Opens from other threads share the VM, but only one may start it.
-    yield* withKeyLock(
+    const resume = withKeyLock(
       `start:${input.name}`,
       withSlotHolders(
         run("start", ["sandbox", "resume", `local:${input.name}`], { timeout: "5 minutes" }),
       ),
-    );
-    const viewer = yield* requestViewer(input.name).pipe(
-      Effect.repeat({ schedule: Schedule.spaced("2 seconds"), while: (reply) => reply === null }),
-      Effect.timeoutOrElse({
-        duration: "2 minutes",
-        orElse: () =>
-          Effect.fail(
-            new VirtualMachineError({
-              operation: "desktop-startup",
-              reason: "command-failed",
-            }),
-          ),
-      }),
-    );
+    ).pipe(Effect.ensuring(Effect.sync(() => guestSettings.delete(input.name))));
+    // Resume takes seconds even for a running guest, so a guest listed as running tries its
+    // desktop first. The listing can be stale after a host restart; resume settles it then.
+    const listedRunning = machine.status === "running" || machine.status === "ready";
+    const ready = listedRunning
+      ? yield* requestViewer(input.name).pipe(Effect.orElseSucceed(() => null))
+      : null;
+    if (ready === null) yield* resume;
+    const viewer =
+      ready ??
+      (yield* requestViewer(input.name).pipe(
+        Effect.repeat({ schedule: Schedule.spaced("2 seconds"), while: (reply) => reply === null }),
+        Effect.timeoutOrElse({
+          duration: "2 minutes",
+          orElse: () =>
+            Effect.fail(
+              new VirtualMachineError({
+                operation: "desktop-startup",
+                reason: "command-failed",
+              }),
+            ),
+        }),
+      ));
     if (viewer === null)
       return yield* new VirtualMachineError({ operation: "viewer", reason: "invalid-response" });
-    const { link, url } = viewer;
+    const { url } = viewer;
     const id = yield* random.uuidV4().pipe(Effect.orDie);
     const now = yield* Clock.currentTimeMillis;
-    const expiresAt = Math.min(link.expires_at_unix * 1000, now + 3_600_000);
+    const expiresAt = Math.min(viewer.expiresAt, now + 3_600_000);
     for (const [key, lease] of leases) if (lease.expiresAt <= now) leases.delete(key);
     if (leases.size >= 64) leases.delete(leases.keys().next().value!);
     // A lease is issued only by the operate-scoped open RPC. Its guest viewer
@@ -1125,6 +1157,7 @@ const make = Effect.gen(function* () {
   ) {
     yield* requireMachine(name);
     yield* disconnectGuest(name);
+    guestSettings.delete(name);
     yield* run(
       remove ? "delete" : "stop",
       ["sandbox", remove ? "rm" : "suspend", `local:${name}`, ...(remove ? ["--force"] : [])],
@@ -1432,7 +1465,7 @@ const make = Effect.gen(function* () {
           Effect.onError((cause) =>
             cause.reasons.every((reason) => Cause.isFailReason(reason) && isMcpError(reason.error))
               ? Effect.void
-              : disconnectGuest(input.name, threadId),
+              : evictGuest(input.name, threadId),
           ),
           Effect.mapError(
             (cause) =>
@@ -1451,7 +1484,7 @@ const make = Effect.gen(function* () {
           Effect.onError((cause) =>
             cause.reasons.every((reason) => Cause.isFailReason(reason) && isMcpError(reason.error))
               ? Effect.void
-              : disconnectGuest(name, threadId),
+              : evictGuest(name, threadId),
           ),
           Effect.mapError(
             (cause) =>
