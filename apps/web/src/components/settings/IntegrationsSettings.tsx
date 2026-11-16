@@ -1188,18 +1188,24 @@ function AgentBrowserAccessSetting() {
   );
 }
 
-function BrowserAutoShowFloatingPreviewSetting({ disabled }: { readonly disabled: boolean }) {
+const AGENT_PREVIEW_TARGET_LABELS = {
+  floating: "Floating preview",
+  panel: "Right panel",
+} as const;
+
+function BrowserAutoShowFloatingPreviewSetting() {
   const autoShow = useClientSettings((settings) => settings.browserAutoShowFloatingPreview);
   const updateSettings = useUpdateScopedSettings();
+  const target = autoShow ? "floating" : "panel";
 
   return (
     <SettingsRow
       {...searchableSetting("browser-auto-show-floating-preview")}
-      description="Show the floating preview when an agent opens a browser or device unless the agent says otherwise."
+      description="Where a browser, device, or VM opens when an agent shows it."
       resetAction={
-        !disabled && autoShow !== DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW ? (
+        autoShow !== DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW ? (
           <SettingResetButton
-            label="auto-show floating preview"
+            label="agent preview location"
             onClick={() =>
               updateSettings({
                 browserAutoShowFloatingPreview: DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW,
@@ -1209,14 +1215,25 @@ function BrowserAutoShowFloatingPreviewSetting({ disabled }: { readonly disabled
         ) : null
       }
       control={
-        <Switch
-          disabled={disabled}
-          checked={autoShow}
-          onCheckedChange={(checked) =>
-            updateSettings({ browserAutoShowFloatingPreview: Boolean(checked) })
-          }
-          aria-label="Auto-show floating preview"
-        />
+        <Select
+          value={target}
+          onValueChange={(value) => {
+            if (value === "floating" || value === "panel") {
+              updateSettings({ browserAutoShowFloatingPreview: value === "floating" });
+            }
+          }}
+        >
+          <SelectTrigger size="sm" className="w-full sm:w-40" aria-label="Open agent previews in">
+            <SelectValue>{AGENT_PREVIEW_TARGET_LABELS[target]}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup align="end" alignItemWithTrigger={false}>
+            {(["floating", "panel"] as const).map((value) => (
+              <SelectItem hideIndicator key={value} value={value}>
+                {AGENT_PREVIEW_TARGET_LABELS[value]}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
       }
     />
   );
@@ -1706,8 +1723,8 @@ export function BrowserSettingsPanel() {
         <SettingsUnavailableGroup message={desktopOnlyMessage}>
           <BrowserProfilesSetting disabled={desktopOnly} />
           <BrowserLinkTargetSetting disabled={desktopOnly} />
-          <BrowserAutoShowFloatingPreviewSetting disabled={desktopOnly} />
         </SettingsUnavailableGroup>
+        <BrowserAutoShowFloatingPreviewSetting />
         {/* Not desktop-only: web clients search from server-run browser tabs too. */}
         <BrowserSearchEngineSetting />
         <AdvancedSettings

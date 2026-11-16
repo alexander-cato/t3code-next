@@ -282,12 +282,25 @@ describe("revealServerTabs", () => {
     return source?.kind === "browser" ? source.tabId : null;
   };
 
-  it("floats revealed tabs, and only forced ones when floating previews are off", () => {
+  it("floats revealed tabs, or opens them as panel tabs when floating previews are off", () => {
     setup();
-    revealServerTabs(ref, [tab("tab_plain")], { autoShowFloatingPreview: false });
+    revealServerTabs(ref, [tab("tab_plain")], { autoShowFloatingPreview: true });
+    expect(floatingTabId()).toBe("tab_plain");
+
+    setup();
+    const userActionRevision = useRightPanelStore.getState().getUserActionRevision(ref);
+    revealServerTabs(ref, [tab("tab_plain"), tab("tab_forced", true)], {
+      autoShowFloatingPreview: false,
+    });
     expect(floatingTabId()).toBeNull();
-    revealServerTabs(ref, [tab("tab_forced", true)], { autoShowFloatingPreview: false });
-    expect(floatingTabId()).toBe("tab_forced");
+    const panel = useRightPanelStore.getState().byThreadKey[threadKey];
+    expect(panel?.isOpen).toBe(true);
+    expect(panel?.surfaces.map((surface) => surface.id)).toEqual([
+      "browser:tab_plain",
+      "browser:tab_forced",
+    ]);
+    expect(panel?.activeSurfaceId).toBe("browser:tab_forced");
+    expect(useRightPanelStore.getState().getUserActionRevision(ref)).toBe(userActionRevision);
   });
 
   it("focuses a tab already in the panel instead of floating it when forced", () => {
