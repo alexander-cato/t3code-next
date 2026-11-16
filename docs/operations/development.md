@@ -227,8 +227,9 @@ Actions. Release credentials belong only in the `fork-release` environment, rest
 The [Security workflow](../../.github/workflows/security.yml) runs on PRs to `main`, on pushes to
 `main`, and on each nightly sync candidate. Each scan covers only what the change introduces:
 CodeQL fails on results of security severity 7.0 or higher that touch added lines, dependency
-review fails on added high-severity vulnerabilities, and gitleaks scans the new commits. Add a
-reviewed gitleaks false positive to `.gitleaksignore` by its fingerprint. With
+review fails on added high-severity vulnerabilities, and gitleaks scans the new commits. On a
+nightly candidate, CodeQL and gitleaks also leave out the lines and commits the merged upstream
+nightly already has. Add a reviewed gitleaks false positive to `.gitleaksignore` by its fingerprint. With
 `FORK_SYNC_AUTO_MERGE` on, the nightly merger needs `Check`, `Agent context budget`, and
 `Security check` to pass on the exact candidate, plus a completed Codex code review with no
 unresolved findings. It ignores the Codex security review, which reports completion but no

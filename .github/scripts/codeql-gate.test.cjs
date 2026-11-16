@@ -78,7 +78,7 @@ test("blocks introduced high-severity results and ignores pre-existing ones", ()
     [{ locations: [location("src/new.ts", 1)], suppressions: [{ kind: "inSource" }] }, false],
   ];
   for (const [extra, blocked] of cases) {
-    const findings = introducedFindings([sarif([result(extra)])], DIFF, 7);
+    const findings = introducedFindings([sarif([result(extra)])], [DIFF], 7);
     assert.equal(findings.length, blocked ? 1 : 0, JSON.stringify(extra));
     if (blocked) assert.equal(findings[0].blocking, true);
   }
@@ -95,11 +95,27 @@ test("reports introduced results below the threshold without blocking, and skips
         "5.0",
       ),
     ],
-    DIFF,
+    [DIFF],
     7,
   );
   assert.deepEqual(
     findings.map(({ ruleId, blocking }) => ({ ruleId, blocking })),
     [{ ruleId: "js/sql-injection", blocking: false }],
+  );
+});
+
+test("a nightly candidate blocks only lines it adds to both main and the upstream nightly", () => {
+  // Against the nightly, the candidate adds only src/new.ts line 2; lines 1 and 3 are upstream's.
+  const fromNightly = ["--- a/src/new.ts", "+++ b/src/new.ts", "@@ -1,0 +2 @@", "+b", ""].join(
+    "\n",
+  );
+  const result = (line) => ({
+    ruleId: "js/sql-injection",
+    locations: [location("src/new.ts", line)],
+  });
+  const findings = introducedFindings([sarif([result(1), result(2)])], [DIFF, fromNightly], 7);
+  assert.deepEqual(
+    findings.map(({ line }) => line),
+    [2],
   );
 });
