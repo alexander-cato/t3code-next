@@ -361,14 +361,22 @@ const make = Effect.gen(function* () {
   );
   // Lume VMs the user registered in place. T3 never deletes these; it only unregisters them.
   const adoptedPath = path.join(root, "adopted.json");
-  const adopted = new Set(
-    yield* fs.readFileString(adoptedPath).pipe(
-      Effect.flatMap(
-        Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(Schema.String))),
-      ),
-      Effect.orElseSucceed((): ReadonlyArray<string> => []),
-    ),
-  );
+  // Only a missing file means none. An unreadable one could hide an adopted VM, and treating
+  // that VM as T3's own would make removing it a deletion, so T3 then removes and adopts nothing.
+  const savedAdopted = (yield* fs.exists(adoptedPath).pipe(Effect.orElseSucceed(() => true)))
+    ? yield* fs
+        .readFileString(adoptedPath)
+        .pipe(
+          Effect.flatMap(
+            Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(Schema.String))),
+          ),
+          Effect.option,
+        )
+    : Option.some<ReadonlyArray<string>>([]);
+  const adopted = new Set(Option.getOrElse(savedAdopted, (): ReadonlyArray<string> => []));
+  const requireAdoptedRegistry = Option.isSome(savedAdopted)
+    ? Effect.void
+    : Effect.fail(new VirtualMachineError({ operation: "adopted-registry", reason: "storage" }));
   const writePrivate = (directory: string, file: string, contents: string) => {
     const partial = path.join(directory, `.${file}.partial`);
     return fs
@@ -379,8 +387,12 @@ const make = Effect.gen(function* () {
         Effect.andThen(fs.rename(partial, path.join(directory, file))),
       );
   };
-  const saveAdopted = Effect.suspend(() => encodeJson([...adopted].toSorted())).pipe(
-    Effect.flatMap((contents) => writePrivate(root, "adopted.json", contents)),
+  // Removals of different VMs run concurrently and share one temporary file.
+  const adoptedWrites = Semaphore.makeUnsafe(1);
+  const saveAdopted = adoptedWrites.withPermits(1)(
+    Effect.suspend(() => encodeJson([...adopted].toSorted())).pipe(
+      Effect.flatMap((contents) => writePrivate(root, "adopted.json", contents)),
+    ),
   );
   const cuaVmm = (name: string) => path.join(homeDirectory, ".cua", "vmm", "lume", name);
   const state = yield* Ref.make<VirtualMachineState>({
@@ -1025,6 +1037,7 @@ const make = Effect.gen(function* () {
    */
   const adoptMachine = Effect.fn("VirtualMachineService.adopt")(function* (name: string) {
     yield* requireEnabled();
+    yield* requireAdoptedRegistry;
     if ((yield* list()).machines.some((machine) => machine.name === name)) return yield* list(true);
     const [machines, owned] = yield* Effect.all([lumeMachines(), cuaOwned], { concurrency: 2 });
     const source = machines.find((machine) => machine.name === name);
@@ -1481,7 +1494,11 @@ const make = Effect.gen(function* () {
       // Decided under the lock, so a removal queued behind an adoption sees the VM as adopted.
       yield* withMachine(
         name,
-        Effect.suspend(() => (adopted.has(name) ? release(name) : changePower(name, true))),
+        requireAdoptedRegistry.pipe(
+          Effect.andThen(
+            Effect.suspend(() => (adopted.has(name) ? release(name) : changePower(name, true))),
+          ),
+        ),
         { exclusive: true },
       );
     }),

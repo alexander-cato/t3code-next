@@ -72,6 +72,8 @@ const fixture = Effect.fn("vm.fixture")(function* (options?: {
     count: number,
   ) => ProcessRunner.ProcessRunOutput | Effect.Effect<ProcessRunner.ProcessRunOutput> | undefined;
   readonly view?: (count: number) => Effect.Effect<ProcessRunner.ProcessRunOutput>;
+  // Contents of virtual-machines/adopted.json when the service starts.
+  readonly adoptedRegistry?: string;
   readonly guestResponse?: (
     method: string,
     session: string | null,
@@ -162,6 +164,11 @@ const fixture = Effect.fn("vm.fixture")(function* (options?: {
   const settings = path.join(root, "userdata", "virtual-machines", "settings.json");
   yield* fs.makeDirectory(path.dirname(settings), { recursive: true });
   yield* fs.writeFileString(settings, json({ enabled: options?.enabled ?? true }));
+  if (options?.adoptedRegistry !== undefined)
+    yield* fs.writeFileString(
+      path.join(path.dirname(settings), "adopted.json"),
+      options.adoptedRegistry,
+    );
   let status = options?.status ?? "stopped";
   let listCount = 0;
   let viewCount = 0;
@@ -2101,7 +2108,7 @@ it.effect("clones only a stopped VM, through a fork or Lume rather than a downlo
   ),
 );
 
-/** A host with Lume VMs outside Cua, whose Cua listing shows macos27-base once it is registered. */
+/** A host with Lume VMs outside Cua, whose Cua listing shows each one once it is registered. */
 const lumeHost = Effect.fn("vm.lumeHost")(function* () {
   let registered = (_name: string): Effect.Effect<boolean> => Effect.succeed(false);
   // `hold` pauses the next Cua listing after it has read the host, as a slow refresh would.
@@ -2119,6 +2126,7 @@ const lumeHost = Effect.fn("vm.lumeHost")(function* () {
           cpuCount: 8,
           memorySize: 8 * 1024 ** 3,
         },
+        { name: "second-base", status: "stopped", os: "macOS" },
         { name: "busy-base", status: "running", os: "macOS" },
         { name: "cua-base-1", status: "stopped", os: "macOS" },
         { name: "ubuntu", status: "stopped", os: "linux" },
@@ -2127,20 +2135,18 @@ const lumeHost = Effect.fn("vm.lumeHost")(function* () {
     ),
     list: () =>
       Effect.gen(function* () {
-        const adopted = yield* registered("macos27-base");
+        const adopted: Array<string> = [];
+        for (const name of ["macos27-base", "second-base"])
+          if (yield* registered(name)) adopted.push(name);
         const reply = output(
           json([
             { name: "native-tile", status: "stopped", location: "local", runtime: "lume" },
-            ...(adopted
-              ? [
-                  {
-                    name: "macos27-base",
-                    status: control.status,
-                    location: "local",
-                    runtime: "lume",
-                  },
-                ]
-              : []),
+            ...adopted.map((name) => ({
+              name,
+              status: control.status,
+              location: "local",
+              runtime: "lume",
+            })),
           ]),
         );
         const hold = control.hold;
@@ -2176,6 +2182,7 @@ it.effect("adopts a Lume VM made outside Cua in place and only unregisters it on
       expect((yield* vms.list).external).toEqual([
         { name: "busy-base", status: "running" },
         { name: "macos27-base", status: "stopped" },
+        { name: "second-base", status: "stopped" },
       ]);
       const refused = (name: string) =>
         vms.adopt(name).pipe(
@@ -2191,7 +2198,10 @@ it.effect("adopts a Lume VM made outside Cua in place and only unregisters it on
         status: "stopped",
         adopted: true,
       });
-      expect(adopted.external).toEqual([{ name: "busy-base", status: "running" }]);
+      expect(adopted.external).toEqual([
+        { name: "busy-base", status: "running" },
+        { name: "second-base", status: "stopped" },
+      ]);
       expect(calls.some((call) => call.args[0] === "clone")).toBe(false);
       const record = JSON.parse(yield* fs.readFileString(path.join(records, "macos27-base.json")));
       expect(record).toMatchObject({ name: "macos27-base", cpu_count: 8, memory_mb: 8192 });
@@ -2225,7 +2235,7 @@ it.effect("adopts a Lume VM made outside Cua in place and only unregisters it on
 it.effect("never deletes an adopted VM or loses it from both lists when calls race", () =>
   provide(
     Effect.gen(function* () {
-      const { vms, calls, hold } = yield* lumeHost();
+      const { vms, calls, hold, fs, path, root } = yield* lumeHost();
       // A removal queued behind the adoption must see the VM as adopted, not as T3's own.
       const adopting = yield* hold();
       const adoption = yield* vms.adopt("macos27-base").pipe(Effect.forkChild);
@@ -2250,6 +2260,33 @@ it.effect("never deletes an adopted VM or loses it from both lists when calls ra
         name: "macos27-base",
         status: "stopped",
       });
+
+      // Removals of two adopted VMs save the shared list at the same time.
+      yield* vms.adopt("macos27-base");
+      yield* vms.adopt("second-base");
+      yield* Effect.all([vms.remove("macos27-base"), vms.remove("second-base")], {
+        concurrency: 2,
+      });
+      const saved = path.join(root, "userdata", "virtual-machines", "adopted.json");
+      expect(JSON.parse(yield* fs.readFileString(saved))).toEqual([]);
+      expect(calls.some((call) => call.args.includes("rm"))).toBe(false);
+    }),
+  ),
+);
+
+it.effect("deletes no VM while the list of adopted VMs cannot be read", () =>
+  provide(
+    Effect.gen(function* () {
+      // Unreadable ownership must not make an adopted VM look like T3's own.
+      const { vms, calls } = yield* fixture({ status: "ready", adoptedRegistry: "{not json" });
+      const refused = (effect: Effect.Effect<unknown, VirtualMachineError>) =>
+        effect.pipe(
+          Effect.match({ onFailure: (error) => error.reason, onSuccess: () => "succeeded" }),
+        );
+      expect(yield* refused(vms.remove("native-tile"))).toBe("storage");
+      expect(yield* refused(vms.adopt("macos27-base"))).toBe("storage");
+      expect(calls.some((call) => call.args.includes("rm"))).toBe(false);
+      expect(calls.some((call) => call.args.includes("suspend"))).toBe(false);
     }),
   ),
 );

@@ -330,6 +330,8 @@ export class VirtualMachineError extends Schema.TaggedError<VirtualMachineError>
       case "invalid-response":
         return "Cua returned an unsupported response. Update Cua and try again.";
       case "storage":
+        if (this.operation === "adopted-registry")
+          return "T3 could not read which VMs were added from Lume (virtual-machines/adopted.json in its data folder), so it deletes and adds no VMs. Fix or restore that file, then restart T3.";
         return "Virtual machine settings could not be saved.";
     }
   }
