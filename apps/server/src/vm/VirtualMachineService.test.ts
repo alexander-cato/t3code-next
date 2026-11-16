@@ -1141,7 +1141,7 @@ it.effect("reconnects after transport loss without replaying uncertain guest inp
   provide(
     Effect.gen(function* () {
       let failNext = true;
-      const { vms, requests } = yield* fixture({
+      const { vms, requests, calls } = yield* fixture({
         guestResponse: (method, _transport, _id, params) => {
           if (method === "tools/call" && params?.name === "click" && failNext) {
             failNext = false;
@@ -1158,6 +1158,8 @@ it.effect("reconnects after transport loss without replaying uncertain guest inp
       yield* vms.tools(threadId, "native-tile");
       expect(requests.at(-1)).toMatchObject({ method: "tools/list", session: "transport-2" });
       expect(requests.filter((request) => request.method === "initialize")).toHaveLength(2);
+      // The guest may have restarted with a new address or token.
+      expect(calls.filter((call) => call.args.includes("config"))).toHaveLength(2);
     }),
   ),
 );
@@ -1265,7 +1267,7 @@ it.effect("evicts a failed tools transport before the next guest request", () =>
   provide(
     Effect.gen(function* () {
       let failNext = true;
-      const { vms, requests } = yield* fixture({
+      const { vms, requests, calls } = yield* fixture({
         guestResponse: (method) => {
           if (method === "tools/list" && failNext) {
             failNext = false;
@@ -1279,6 +1281,7 @@ it.effect("evicts a failed tools transport before the next guest request", () =>
       yield* vms.control(threadId, { name: "native-tile", tool: "click", arguments: {} });
       expect(requests.at(-1)).toMatchObject({ method: "tools/call", session: "transport-2" });
       expect(requests.filter((request) => request.method === "tools/list")).toHaveLength(1);
+      expect(calls.filter((call) => call.args.includes("config"))).toHaveLength(2);
     }),
   ),
 );

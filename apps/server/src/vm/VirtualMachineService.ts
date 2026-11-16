@@ -569,6 +569,11 @@ const make = Effect.gen(function* () {
   // A running guest keeps its address and token, and Cua takes seconds to read them.
   // Starting, suspending or deleting a VM, or a call they fail, drops them.
   const guestSettings = new Map<string, typeof McpConnection.Type>();
+  // A broken transport may mean the guest restarted with a new address or token.
+  const evictGuest = (name: string, threadId: ThreadId) =>
+    disconnectGuest(name, threadId).pipe(
+      Effect.andThen(Effect.sync(() => guestSettings.delete(name))),
+    );
   const guestEnvironment = Effect.fn("VirtualMachineService.guestEnvironment")(function* (
     name: string,
   ) {
@@ -1460,7 +1465,7 @@ const make = Effect.gen(function* () {
           Effect.onError((cause) =>
             cause.reasons.every((reason) => Cause.isFailReason(reason) && isMcpError(reason.error))
               ? Effect.void
-              : disconnectGuest(input.name, threadId),
+              : evictGuest(input.name, threadId),
           ),
           Effect.mapError(
             (cause) =>
@@ -1479,7 +1484,7 @@ const make = Effect.gen(function* () {
           Effect.onError((cause) =>
             cause.reasons.every((reason) => Cause.isFailReason(reason) && isMcpError(reason.error))
               ? Effect.void
-              : disconnectGuest(name, threadId),
+              : evictGuest(name, threadId),
           ),
           Effect.mapError(
             (cause) =>
