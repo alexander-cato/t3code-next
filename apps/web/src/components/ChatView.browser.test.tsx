@@ -429,6 +429,10 @@ it.each(["Failed prompt", ""])(
       acceptCommands: true,
       holdCommand: (command) => command.type === "message.dispatch",
     });
+    // Sending verifies each ready upload still exists on the server.
+    using _verify = answerRpc(WS_METHODS.assetsCreateUrl, () =>
+      Effect.succeed({ relativeUrl: "/upload", expiresAt: 0 }),
+    );
     __setClientSettingsForTests({
       ...DEFAULT_CLIENT_SETTINGS,
       onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
