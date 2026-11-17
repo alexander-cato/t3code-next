@@ -243,7 +243,7 @@ test("reports a failed required check in the blocked issue, with or without auto
   const results = {
     failed: {
       merged: false,
-      failed: true,
+      blocked: true,
       reason: "Agent context budget failed on the exact candidate.",
     },
     rerunning: {
