@@ -66,9 +66,17 @@ function fixture() {
     merged: [],
     page: 0,
     secondPage: false,
+    // Codex's inline review on the head, plus a body-only finding on an older candidate.
+    reviews: [
+      { id: 1, user: { id: 199175422 }, commit_id: HEAD },
+      { id: 2, user: { id: 199175422 }, commit_id: BASE },
+    ],
+    reviewComments: { 1: [{ id: 10 }], 2: [] },
   };
   const listComments = () => {},
-    listForRef = () => {};
+    listForRef = () => {},
+    listReviews = () => {},
+    listCommentsForReview = () => {};
   const github = {
     rest: {
       pulls: {
@@ -85,6 +93,8 @@ function fixture() {
             base: { sha: BASE, ref: "main" },
           },
         }),
+        listReviews,
+        listCommentsForReview,
       },
       repos: {
         getBranch: async () => ({
@@ -97,7 +107,12 @@ function fixture() {
       issues: { listComments },
       checks: { listForRef },
     },
-    paginate: async (method) => (method === listComments ? [summary(state.review)] : state.checks),
+    paginate: async (method, request) => {
+      if (method === listComments) return [summary(state.review)];
+      if (method === listReviews) return state.reviews;
+      if (method === listCommentsForReview) return state.reviewComments[request.review_id];
+      return state.checks;
+    },
     graphql: async () => {
       state.page++;
       return {
@@ -157,6 +172,7 @@ test("leaves the PR open for review, check, discussion, or main races without re
       state.resolved = false;
       state.secondPage = true;
     },
+    (state) => (state.reviewComments[1] = []),
   ];
   for (const alter of [
     (state) => (state.review.code_review.status = "running"),
