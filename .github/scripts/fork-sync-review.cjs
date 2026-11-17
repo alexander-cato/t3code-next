@@ -43,6 +43,23 @@ async function mergeReviewedNightly({ github, merger, pullNumber, head, base }) 
     pull.head.repo?.full_name !== "alexander-cato/t3code-next"
   )
     return pending("Nightly PR is not the pinned ready candidate.");
+  const checks = await github.paginate(github.rest.checks.listForRef, {
+    ...REPOSITORY,
+    ref: head,
+    per_page: 100,
+  });
+  // Codex security reviews report no pass or fail, so the owner's Security workflow gates instead.
+  let waiting;
+  for (const name of ["Check", "Agent context budget", "Security check"]) {
+    const check = checks
+      .filter((item) => item.name === name && item.head_sha === head && item.app?.id === 15368)
+      .sort((a, b) => b.id - a.id)[0];
+    if (check?.status === "completed" && check.conclusion !== "success")
+      return { merged: false, failed: true, reason: `${name} failed on the exact candidate.` };
+    if (check?.status !== "completed")
+      waiting ??= pending(`Waiting for ${name} on the exact candidate.`);
+  }
+  if (waiting) return waiting;
   const comments = await github.paginate(github.rest.issues.listComments, {
     ...REPOSITORY,
     issue_number: pullNumber,
@@ -52,19 +69,6 @@ async function mergeReviewedNightly({ github, merger, pullNumber, head, base }) 
     return pending(
       "Waiting for a completed current-head Codex code review with no unresolved findings.",
     );
-  const checks = await github.paginate(github.rest.checks.listForRef, {
-    ...REPOSITORY,
-    ref: head,
-    per_page: 100,
-  });
-  // Codex security reviews report no pass or fail, so the owner's Security workflow gates instead.
-  for (const name of ["Check", "Agent context budget", "Security check"]) {
-    const check = checks
-      .filter((item) => item.name === name && item.head_sha === head && item.app?.id === 15368)
-      .sort((a, b) => b.id - a.id)[0];
-    if (check?.status !== "completed" || check.conclusion !== "success")
-      return pending(`Waiting for ${name} on the exact candidate.`);
-  }
   let after = null;
   let done = false;
   for (let page = 0; page < 20; page++) {
