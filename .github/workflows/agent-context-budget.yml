@@ -62,10 +62,13 @@ jobs:
 
       - name: Resolve the upstream nightly the candidate merges
         id: upstream
-        if: github.event_name == 'workflow_dispatch'
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          (github.event.pull_request.head.ref == 'sync/upstream-nightly' &&
+          github.event.pull_request.head.repo.full_name == github.repository)
         env:
           GH_TOKEN: ${{ github.token }}
-          HEAD: ${{ inputs.expected_sha }}
+          HEAD: ${{ inputs.expected_sha || github.event.pull_request.head.sha }}
         run: |
           nightly=$(gh api "repos/$GITHUB_REPOSITORY/branches/upstream%2Fnightly" --jq .commit.sha)
           status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$nightly...$HEAD" --jq .status)
