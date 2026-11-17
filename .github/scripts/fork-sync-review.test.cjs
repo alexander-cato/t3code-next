@@ -166,6 +166,11 @@ test("merges only a fully reviewed candidate, pinning the head and using the App
     },
   ]);
 });
+test("merges past a body-only head review when Codex reports no findings", async () => {
+  const { state, input } = fixture();
+  state.reviewComments[1] = [];
+  assert.equal((await mergeReviewedNightly(input)).merged, true);
+});
 test("leaves the PR open for review, check, discussion, or main races without relying on older success", async () => {
   // A failed check is reported as blocked even while the Codex review is still running.
   const blocked = [
@@ -179,7 +184,10 @@ test("leaves the PR open for review, check, discussion, or main races without re
       state.resolved = false;
       state.secondPage = true;
     },
-    (state) => (state.reviewComments[1] = []),
+    (state) => {
+      state.review.code_review.has_unresolved_findings = true;
+      state.reviewComments[1] = [];
+    },
     (state) => (state.signed = false),
   ];
   for (const alter of [

@@ -106,11 +106,14 @@ async function mergeReviewedNightly({ github, merger, pullNumber, head, base }) 
   }
   if (!done) return pending("Review thread list exceeds the verification limit.");
   // A finding on a line outside the diff lands in the review body, with no thread to resolve.
-  const reviews = await github.paginate(github.rest.pulls.listReviews, {
-    ...REPOSITORY,
-    pull_number: pullNumber,
-    per_page: 100,
-  });
+  const reviews =
+    review.has_unresolved_findings === false
+      ? []
+      : await github.paginate(github.rest.pulls.listReviews, {
+          ...REPOSITORY,
+          pull_number: pullNumber,
+          per_page: 100,
+        });
   for (const item of reviews) {
     if (item.user?.id !== BOT_ID || item.commit_id !== head) continue;
     const inline = await github.paginate(github.rest.pulls.listCommentsForReview, {
