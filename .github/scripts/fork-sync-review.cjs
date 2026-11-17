@@ -129,6 +129,24 @@ async function mergeReviewedNightly({ github, merger, pullNumber, head, base }) 
   }
   if (review.has_unresolved_findings !== false && threadCount === 0)
     return pending("Codex reported findings without review threads to resolve.");
+  // Main requires signed commits, so GitHub refuses the merge while any new commit is unsigned.
+  for (let page = 1, seen = 0; ; page++) {
+    const { data } = await github.rest.repos.compareCommitsWithBasehead({
+      ...REPOSITORY,
+      basehead: `${base}...${head}`,
+      per_page: 100,
+      page,
+    });
+    const unsigned = data.commits.find((commit) => commit.commit?.verification?.verified !== true);
+    if (unsigned)
+      return {
+        merged: false,
+        blocked: true,
+        reason: `Commit ${unsigned.sha.slice(0, 10)} is unsigned, and main requires signed commits. Merge the PR by hand with that rule briefly lifted.`,
+      };
+    seen += data.commits.length;
+    if (data.commits.length === 0 || seen >= data.total_commits) break;
+  }
   const { data: main } = await github.rest.repos.getBranch({ ...REPOSITORY, branch: "main" });
   const { data: source } = await github.rest.repos.getCommit({ ...REPOSITORY, ref: head });
   if (

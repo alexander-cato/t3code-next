@@ -72,6 +72,7 @@ function fixture() {
       { id: 2, user: { id: 199175422 }, commit_id: BASE },
     ],
     reviewComments: { 1: [{ id: 10 }], 2: [] },
+    signed: true,
   };
   const listComments = () => {},
     listForRef = () => {},
@@ -99,6 +100,12 @@ function fixture() {
       repos: {
         getBranch: async () => ({
           data: { protected: state.protected, commit: { sha: state.base } },
+        }),
+        compareCommitsWithBasehead: async () => ({
+          data: {
+            total_commits: 1,
+            commits: [{ sha: HEAD, commit: { verification: { verified: state.signed } } }],
+          },
         }),
         getCommit: async () => ({
           data: { sha: HEAD, commit: { verification: { verified: true } } },
@@ -173,6 +180,7 @@ test("leaves the PR open for review, check, discussion, or main races without re
       state.secondPage = true;
     },
     (state) => (state.reviewComments[1] = []),
+    (state) => (state.signed = false),
   ];
   for (const alter of [
     (state) => (state.review.code_review.status = "running"),
