@@ -38,16 +38,24 @@ test("compares context growth against the PR base instead of the older default b
     writeFileSync(budget, JSON.stringify({ context: 10 }));
     git("add", "budget.json");
     git("commit", "-m", "older default branch");
+    const upstreamBase = git("rev-parse", "HEAD");
     git("switch", "-c", "fork/nightly");
     writeFileSync(budget, JSON.stringify({ context: 20 }));
     git("commit", "-am", "included upstream nightly");
     const base = git("rev-parse", "HEAD");
-    git("switch", "-c", "fork-work/test");
+    git("switch", "-c", "upstream", upstreamBase);
+    writeFileSync(budget, JSON.stringify({ context: 15 }));
+    git("commit", "-am", "newer upstream nightly");
+    const nightly = git("rev-parse", "HEAD");
+    git("switch", "-c", "fork-work/test", base);
     git("remote", "add", "origin", directory);
 
     const workflow = readFileSync(join(__dirname, "../workflows/agent-context-budget.yml"), "utf8");
-    const script = workflow.split("        run: |\n")[1].replace(/^          /gm, "");
-    const run = (allow = "false") =>
+    const script = workflow
+      .split("      - name: Compare with PR base\n")[1]
+      .split("        run: |\n")[1]
+      .replace(/^          /gm, "");
+    const run = (allow = "false", upstream = {}) =>
       spawnSync("bash", ["-e", "-c", script], {
         cwd: directory,
         encoding: "utf8",
@@ -57,6 +65,7 @@ test("compares context growth against the PR base instead of the older default b
           BASE_SHA: base,
           RUNNER_TEMP: directory,
           ALLOW_INCREASE: allow,
+          ...upstream,
         },
       });
     const unchanged = run();
@@ -66,6 +75,15 @@ test("compares context growth against the PR base instead of the older default b
     assert.equal(grown.status, 1, grown.stdout + grown.stderr);
     assert.match(grown.stdout, /context: 20 -> 21/);
     assert.equal(run("true").status, 0);
+    // A nightly candidate may also carry the +5 its upstream nightly added, but no fork growth.
+    const candidate = { NIGHTLY: nightly, NIGHTLY_BASE: upstreamBase };
+    writeFileSync(budget, JSON.stringify({ context: 25 }));
+    const merged = run("false", candidate);
+    assert.equal(merged.status, 0, merged.stdout + merged.stderr);
+    writeFileSync(budget, JSON.stringify({ context: 26 }));
+    const forkGrown = run("false", candidate);
+    assert.equal(forkGrown.status, 1, forkGrown.stdout + forkGrown.stderr);
+    assert.match(forkGrown.stdout, /context: 20 -> 26 \(\+6, upstream nightly \+5\)/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

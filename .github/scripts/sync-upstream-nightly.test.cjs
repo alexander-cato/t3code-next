@@ -137,6 +137,7 @@ function fixture() {
       sha: MAIN,
     },
     token: "test-token",
+    checks: async () => undefined,
     conflictsOf: ({ base, ours, theirs }) => {
       state.calls.push(["conflicts", base, ours, theirs]);
       return ["apps/desktop/src/app/DesktopApp.test.ts"];
@@ -238,29 +239,27 @@ test("reports a conflict once in an assigned issue, waits without retrying it, a
   assert.equal(state.calls.filter(([kind]) => kind === "issue").length, 1);
 });
 
-test("reports a failed required check in the blocked issue and closes it once the PR is ready", async () => {
-  const { state, input } = fixture();
-  let failed = true;
-  const run = () =>
-    syncUpstreamNightly({
-      ...input,
-      autoMerge: true,
-      review: async () =>
-        failed
-          ? {
-              merged: false,
-              failed: true,
-              reason: "Agent context budget failed on the exact candidate.",
-            }
-          : { merged: false, reason: "Waiting for a completed current-head Codex code review." },
-    });
-  assert.match((await run()).review.reason, /Fix needed: #100$/);
-  assert.match(state.issues[0].body, /pull\/7/);
-  await run();
-  assert.equal(state.calls.filter(([kind]) => kind.startsWith("issue")).length, 1);
-  failed = false;
-  await run();
-  assert.equal(state.issues[0].state, "closed");
+test("reports a failed required check in the blocked issue, with or without automatic merging, and closes it once unblocked", async () => {
+  for (const autoMerge of [true, false]) {
+    const { state, input } = fixture();
+    let failed = true;
+    const status = async () =>
+      failed
+        ? {
+            merged: false,
+            failed: true,
+            reason: "Agent context budget failed on the exact candidate.",
+          }
+        : { merged: false, reason: "Waiting for a completed current-head Codex code review." };
+    const run = () => syncUpstreamNightly({ ...input, autoMerge, review: status, checks: status });
+    assert.match((await run()).review.reason, /Fix needed: #100$/);
+    assert.match(state.issues[0].body, /pull\/7/);
+    await run();
+    assert.equal(state.calls.filter(([kind]) => kind.startsWith("issue")).length, 1);
+    failed = false;
+    await run();
+    assert.equal(state.issues[0].state, "closed");
+  }
 });
 
 test("mirrors divergent upstream blobs from a partial fork checkout", (t) => {

@@ -1,4 +1,4 @@
-const { mergeReviewedNightly } = require("./fork-sync-review.cjs");
+const { mergeReviewedNightly, requiredChecks } = require("./fork-sync-review.cjs");
 const { execFileSync } = require("node:child_process");
 const { mkdtempSync, writeFileSync, rmSync } = require("node:fs");
 const { join } = require("node:path");
@@ -145,6 +145,7 @@ async function syncUpstreamNightly({
   push = pushMirror,
   conflictsOf = listConflicts,
   review = mergeReviewedNightly,
+  checks = requiredChecks,
 }) {
   if (
     `${context.repo.owner}/${context.repo.repo}` !== "alexander-cato/t3code-next" ||
@@ -363,7 +364,11 @@ async function syncUpstreamNightly({
         head: candidate,
         base: main,
       })
-    : { merged: false, reason: "Automatic nightly merging is disabled." };
+    : await checks({ github, head: candidate }).then((status) =>
+        status?.failed
+          ? { merged: false, ...status }
+          : { merged: false, reason: "Automatic nightly merging is disabled." },
+      );
   if (result.failed)
     result.reason += ` Fix needed: ${await block({ reason: result.reason, candidate, pull: pull.html_url })}`;
   else await unblock(`${nightly.tag_name} is no longer blocked in ${pull.html_url}.`);
