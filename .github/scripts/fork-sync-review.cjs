@@ -46,7 +46,7 @@ async function requiredChecks({ github, head }) {
     if (check?.status === "completed" && check.conclusion !== "success")
       return { failed: true, reason: `${name} failed on the exact candidate.` };
     if (check?.status !== "completed")
-      waiting ??= { reason: `Waiting for ${name} on the exact candidate.` };
+      waiting ??= { waiting: true, reason: `Waiting for ${name} on the exact candidate.` };
   }
   return waiting;
 }

@@ -239,25 +239,38 @@ test("reports a conflict once in an assigned issue, waits without retrying it, a
   assert.equal(state.calls.filter(([kind]) => kind === "issue").length, 1);
 });
 
-test("reports a failed required check in the blocked issue, with or without automatic merging, and closes it once unblocked", async () => {
+test("reports a failed required check in the blocked issue, with or without automatic merging, until a rerun passes", async () => {
+  const results = {
+    failed: {
+      merged: false,
+      failed: true,
+      reason: "Agent context budget failed on the exact candidate.",
+    },
+    rerunning: {
+      merged: false,
+      waiting: true,
+      reason: "Waiting for Agent context budget on the exact candidate.",
+    },
+    passed: undefined,
+  };
   for (const autoMerge of [true, false]) {
     const { state, input } = fixture();
-    let failed = true;
+    let current;
     const status = async () =>
-      failed
-        ? {
-            merged: false,
-            failed: true,
-            reason: "Agent context budget failed on the exact candidate.",
-          }
-        : { merged: false, reason: "Waiting for a completed current-head Codex code review." };
-    const run = () => syncUpstreamNightly({ ...input, autoMerge, review: status, checks: status });
-    assert.match((await run()).review.reason, /Fix needed: #100$/);
+      autoMerge
+        ? (current ?? { merged: false, reason: "Waiting for a Codex code review." })
+        : current;
+    const run = (result) => {
+      current = results[result];
+      return syncUpstreamNightly({ ...input, autoMerge, review: status, checks: status });
+    };
+    assert.match((await run("failed")).review.reason, /Fix needed: #100$/);
     assert.match(state.issues[0].body, /pull\/7/);
-    await run();
+    await run("rerunning");
+    assert.equal(state.issues[0].state, "open");
+    await run("failed");
     assert.equal(state.calls.filter(([kind]) => kind.startsWith("issue")).length, 1);
-    failed = false;
-    await run();
+    await run("passed");
     assert.equal(state.issues[0].state, "closed");
   }
 });

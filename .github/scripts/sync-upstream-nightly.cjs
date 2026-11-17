@@ -367,11 +367,25 @@ async function syncUpstreamNightly({
     : await checks({ github, head: candidate }).then((status) =>
         status?.failed
           ? { merged: false, ...status }
-          : { merged: false, reason: "Automatic nightly merging is disabled." },
+          : {
+              merged: false,
+              waiting: status?.waiting,
+              reason: "Automatic nightly merging is disabled.",
+            },
       );
-  if (result.failed)
-    result.reason += ` Fix needed: ${await block({ reason: result.reason, candidate, pull: pull.html_url })}`;
-  else await unblock(`${nightly.tag_name} is no longer blocked in ${pull.html_url}.`);
+  if (result.failed) {
+    const issue = await block({ reason: result.reason, candidate, pull: pull.html_url });
+    return {
+      changed: true,
+      sha,
+      candidate,
+      pull: pull.html_url,
+      review: { ...result, reason: `${result.reason} Fix needed: ${issue}` },
+    };
+  }
+  // A failed check stays reported until its replacement passes, not while it reruns.
+  if (blocked?.state.kind !== "check" || !result.waiting)
+    await unblock(`${nightly.tag_name} is no longer blocked in ${pull.html_url}.`);
   return { changed: true, sha, candidate, pull: pull.html_url, review: result };
 }
 
