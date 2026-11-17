@@ -2,7 +2,8 @@ name: Agent Context Budget
 
 # Fails when a PR raises a value in agentContextBudget.json above its base. AgentContextBudget.test.ts
 # keeps that file equal to the measured context, so the context cannot grow by editing the file.
-# To accept growth on purpose, a maintainer adds the agent-context-increase label.
+# To accept growth on purpose, a maintainer adds the agent-context-increase label. A nightly
+# candidate may also grow by what the upstream nightly it merges added, so only fork growth counts.
 on:
   workflow_dispatch:
     inputs:
@@ -59,21 +60,53 @@ jobs:
               pullNumber: process.env.PULL_NUMBER });
             core.exportVariable('ALLOW_INCREASE', String(result.allowIncrease));
 
+      - name: Resolve the upstream nightly the candidate merges
+        id: upstream
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          (github.event.pull_request.head.ref == 'sync/upstream-nightly' &&
+          github.event.pull_request.head.repo.full_name == github.repository)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD: ${{ inputs.expected_sha || github.event.pull_request.head.sha }}
+        run: |
+          nightly=$(gh api "repos/$GITHUB_REPOSITORY/branches/upstream%2Fnightly" --jq .commit.sha)
+          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$nightly...$HEAD" --jq .status)
+          if ! [[ "$nightly" =~ ^[0-9a-f]{40}$ ]] || { [ "$status" != ahead ] && [ "$status" != identical ]; }; then
+            echo "::error::Candidate $HEAD does not contain upstream/nightly $nightly; rerun the nightly sync."
+            exit 1
+          fi
+          echo "sha=$nightly" >> "$GITHUB_OUTPUT"
+          echo "base=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BASE_SHA...$nightly" --jq .merge_base_commit.sha)" >> "$GITHUB_OUTPUT"
+
       - name: Compare with PR base
+        env:
+          NIGHTLY: ${{ steps.upstream.outputs.sha }}
+          NIGHTLY_BASE: ${{ steps.upstream.outputs.base }}
         run: |
           git fetch --quiet --depth=1 origin "$BASE_SHA"
-          if ! git cat-file -e "FETCH_HEAD:$BUDGET" 2>/dev/null; then
+          if ! git cat-file -e "$BASE_SHA:$BUDGET" 2>/dev/null; then
             echo "The PR base has no agent context budget yet."
             exit 0
           fi
-          git show "FETCH_HEAD:$BUDGET" > "$RUNNER_TEMP/base.json"
-          grown=$(jq -r --slurpfile base "$RUNNER_TEMP/base.json" '
+          git show "$BASE_SHA:$BUDGET" > "$RUNNER_TEMP/base.json"
+          echo '{}' > "$RUNNER_TEMP/upstream.json"
+          if [ -n "$NIGHTLY" ]; then
+            git fetch --quiet --depth=1 origin "$NIGHTLY" "$NIGHTLY_BASE"
+            if git cat-file -e "$NIGHTLY:$BUDGET" 2>/dev/null && git cat-file -e "$NIGHTLY_BASE:$BUDGET" 2>/dev/null; then
+              jq -n --slurpfile now <(git show "$NIGHTLY:$BUDGET") --slurpfile was <(git show "$NIGHTLY_BASE:$BUDGET") '
+                $now[0] | with_entries(.value = ([.value - ($was[0][.key] // .value), 0] | max))
+              ' > "$RUNNER_TEMP/upstream.json"
+            fi
+          fi
+          grown=$(jq -r --slurpfile base "$RUNNER_TEMP/base.json" --slurpfile upstream "$RUNNER_TEMP/upstream.json" '
             to_entries[]
-            | select($base[0][.key] != null and .value > $base[0][.key])
-            | "\(.key): \($base[0][.key]) -> \(.value) (+\(.value - $base[0][.key]))"
+            | ($upstream[0][.key] // 0) as $up
+            | select($base[0][.key] != null and .value > $base[0][.key] + $up)
+            | "\(.key): \($base[0][.key]) -> \(.value) (+\(.value - $base[0][.key])\(if $up > 0 then ", upstream nightly +\($up)" else "" end))"
           ' "$BUDGET")
           if [ -z "$grown" ]; then
-            echo "Agent context is not larger than the PR base."
+            echo "Agent context did not grow beyond the PR base and the upstream nightly it merges."
             exit 0
           fi
           printf 'Agent context grew compared to the PR base:\n%s\n' "$grown"

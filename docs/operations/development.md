@@ -234,6 +234,13 @@ nightly already has. Add a reviewed gitleaks false positive to `.gitleaksignore`
 `Security check` to pass on the exact candidate, plus a completed Codex code review with no
 unresolved findings. It ignores the Codex security review, which reports completion but no
 result.
+Like the Security scans, the context budget on a nightly candidate counts only growth beyond what
+the upstream nightly added.
+
+When the nightly merge conflicts or a required check fails, the sync opens one issue assigned to
+the owner with the conflicting files and resolution steps, and closes it once the nightly PR is
+ready. It does not retry a known conflict until `main`, the nightly, or `sync/upstream-nightly`
+changes; push the resolution to `sync/upstream-nightly`.
 
 Installed clients update from this repository's releases; the earlier `alexander-cato/t3code` fork
 is retired. This repository's inherited deployment workflows remain disabled until their

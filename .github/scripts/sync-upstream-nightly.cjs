@@ -1,4 +1,4 @@
-const { mergeReviewedNightly } = require("./fork-sync-review.cjs");
+const { mergeReviewedNightly, requiredChecks } = require("./fork-sync-review.cjs");
 const { execFileSync } = require("node:child_process");
 const { mkdtempSync, writeFileSync, rmSync } = require("node:fs");
 const { join } = require("node:path");
@@ -9,6 +9,8 @@ const UPSTREAM = { owner: "pingdotgg", repo: "t3code" };
 const MIRROR = "upstream/nightly";
 const CANDIDATE = "sync/upstream-nightly";
 const SHA = /^[a-f0-9]{40}$/;
+const ISSUE_AUTHOR = "github-actions[bot]";
+const ISSUE_STATE = /<!-- nightly-sync-blocked (\{[^\n]*?\}) -->/;
 
 function selectNightly(releases) {
   const result = releases
@@ -65,6 +67,74 @@ function pushMirror({ sha, expectedSha, token }) {
   }
 }
 
+function listConflicts({ base, ours, theirs }) {
+  const git = (...args) =>
+    execFileSync("git", ["-c", "credential.helper=", ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    });
+  git("fetch", "--no-tags", "--depth=1", "--filter=blob:none", "origin", base, ours, theirs);
+  try {
+    git(
+      "merge-tree",
+      "--write-tree",
+      "--name-only",
+      "--no-messages",
+      `--merge-base=${base}`,
+      ours,
+      theirs,
+    );
+    return [];
+  } catch (error) {
+    // Exit 1 prints the merged tree, then one conflicted path per line.
+    if (error.status !== 1) throw error;
+    return [...new Set(error.stdout.split("\n").slice(1).filter(Boolean))];
+  }
+}
+
+function blockedIssue(state) {
+  const { tag, nightly, main, candidate, head, conflicts, pull, reason } = state;
+  const resolve = conflicts
+    ? [
+        "### Conflicting files",
+        "",
+        ...(conflicts.length
+          ? conflicts.map((file) => `- \`${file}\``)
+          : ["- Unknown; merge locally to see them."]),
+        "",
+        "### Resolve",
+        "",
+        "```sh",
+        "git fetch --no-tags origin main sync/upstream-nightly upstream/nightly",
+        "git switch --detach origin/sync/upstream-nightly",
+        `git merge --no-ff ${head === main ? "origin/main" : "origin/upstream/nightly"} -m "chore(sync): merge ${tag}"`,
+        "# resolve, check, and commit with a signature GitHub verifies",
+        "git push origin HEAD:sync/upstream-nightly",
+        "```",
+        "",
+        "The next sync run uses the pushed resolution, opens the nightly PR, and closes this issue.",
+      ]
+    : [
+        `Fix the failure on ${pull}, on \`sync/upstream-nightly\` or through \`main\`. The sync merges the`,
+        "fixed candidate and closes this issue; run the sync with `retry` to re-dispatch unchanged checks.",
+      ];
+  return {
+    title: `Nightly sync blocked: ${tag}`,
+    body: [
+      `${reason} The fork stays on its current nightly until this is fixed.`,
+      "",
+      `- Upstream nightly: [${tag}](https://github.com/pingdotgg/t3code/releases/tag/${tag}) \`${nightly}\``,
+      `- main: \`${main}\``,
+      `- Candidate \`sync/upstream-nightly\`: \`${candidate}\``,
+      "",
+      ...resolve,
+      "",
+      `<!-- nightly-sync-blocked ${JSON.stringify({ kind: conflicts ? "conflict" : "check", nightly, main, candidate })} -->`,
+    ].join("\n"),
+  };
+}
+
 async function syncUpstreamNightly({
   github,
   candidateGithub = github,
@@ -73,6 +143,9 @@ async function syncUpstreamNightly({
   autoMerge = false,
   token,
   push = pushMirror,
+  conflictsOf = listConflicts,
+  review = mergeReviewedNightly,
+  checks = requiredChecks,
 }) {
   if (
     `${context.repo.owner}/${context.repo.repo}` !== "alexander-cato/t3code-next" ||
@@ -128,8 +201,56 @@ async function syncUpstreamNightly({
     await push({ sha, expectedSha: previousMirror, token });
     if ((await branch(MIRROR)) !== sha) throw new Error("The nightly mirror changed during sync.");
   }
-  if (await contains(sha, main))
+  const issues = await github.paginate(github.rest.issues.listForRepo, {
+    ...REPOSITORY,
+    state: "open",
+    per_page: 100,
+  });
+  const blocked = issues
+    .filter((issue) => !issue.pull_request && issue.user?.login === ISSUE_AUTHOR)
+    .map((issue) => {
+      try {
+        return { issue, state: JSON.parse(issue.body?.match(ISSUE_STATE)?.[1]) };
+      } catch {
+        return undefined;
+      }
+    })
+    .find(Boolean);
+  const unblock = async (comment) => {
+    if (!blocked) return;
+    await github.rest.issues.createComment({
+      ...REPOSITORY,
+      issue_number: blocked.issue.number,
+      body: comment,
+    });
+    await github.rest.issues.update({
+      ...REPOSITORY,
+      issue_number: blocked.issue.number,
+      state: "closed",
+    });
+  };
+  const block = async (state) => {
+    const fields = blockedIssue({ ...state, tag: nightly.tag_name, nightly: sha, main });
+    if (blocked) {
+      if (blocked.issue.body !== fields.body || blocked.issue.title !== fields.title)
+        await github.rest.issues.update({
+          ...REPOSITORY,
+          issue_number: blocked.issue.number,
+          ...fields,
+        });
+      return blocked.issue.html_url;
+    }
+    const { data } = await github.rest.issues.create({
+      ...REPOSITORY,
+      ...fields,
+      assignees: [REPOSITORY.owner],
+    });
+    return data.html_url;
+  };
+  if (await contains(sha, main)) {
+    await unblock(`main contains ${nightly.tag_name}.`);
     return { changed: false, sha, reason: "main already contains this published nightly." };
+  }
   if (!(await branch(CANDIDATE))) {
     await candidateGithub.rest.git.createRef({
       ...REPOSITORY,
@@ -138,6 +259,19 @@ async function syncUpstreamNightly({
     });
   }
   let candidate = await branch(CANDIDATE);
+  const known = blocked?.state;
+  if (
+    !retry &&
+    known?.kind === "conflict" &&
+    known.nightly === sha &&
+    known.main === main &&
+    known.candidate === candidate
+  )
+    return {
+      changed: false,
+      sha,
+      reason: `Waiting for the conflict resolution in ${blocked.issue.html_url}.`,
+    };
   for (const head of [main, sha]) {
     if ((await branch(CANDIDATE)) !== candidate)
       throw new Error("The candidate changed during sync.");
@@ -162,12 +296,24 @@ async function syncUpstreamNightly({
       if ((await branch(CANDIDATE)) !== candidate)
         throw new Error("The candidate changed after the merge.");
     } catch (error) {
-      if (error.status === 409)
-        throw new Error(
-          `Nightly merge conflicts need resolution on ${CANDIDATE}; main was not changed.`,
-          { cause: error },
-        );
-      throw error;
+      if (error.status !== 409) throw error;
+      let conflicts = [];
+      try {
+        const { data } = await github.rest.repos.compareCommitsWithBasehead({
+          ...REPOSITORY,
+          basehead: `${candidate}...${head}`,
+        });
+        conflicts = conflictsOf({
+          base: data.merge_base_commit.sha,
+          ours: candidate,
+          theirs: head,
+        });
+      } catch (listing) {
+        console.warn(`Could not list the conflicting files: ${listing.message}`);
+      }
+      const reason = `Merging ${head === main ? "main" : nightly.tag_name} into ${CANDIDATE} conflicts.`;
+      const issue = await block({ reason, head, candidate, conflicts });
+      return { changed: false, sha, reason: `${reason} Resolution needed: ${issue}` };
     }
   }
   await verified(candidate);
@@ -210,16 +356,37 @@ async function syncUpstreamNightly({
       inputs: { expected_sha: candidate, base_sha: main, pull_request: String(pull.number) },
     });
   }
-  const review = autoMerge
-    ? await mergeReviewedNightly({
+  const result = autoMerge
+    ? await review({
         github,
         merger: candidateGithub,
         pullNumber: pull.number,
         head: candidate,
         base: main,
       })
-    : { merged: false, reason: "Automatic nightly merging is disabled." };
-  return { changed: true, sha, candidate, pull: pull.html_url, review };
+    : await checks({ github, head: candidate }).then((status) =>
+        status?.failed
+          ? { merged: false, ...status }
+          : {
+              merged: false,
+              waiting: status?.waiting,
+              reason: "Automatic nightly merging is disabled.",
+            },
+      );
+  if (result.failed) {
+    const issue = await block({ reason: result.reason, candidate, pull: pull.html_url });
+    return {
+      changed: true,
+      sha,
+      candidate,
+      pull: pull.html_url,
+      review: { ...result, reason: `${result.reason} Fix needed: ${issue}` },
+    };
+  }
+  // A failed check stays reported until its replacement passes, not while it reruns.
+  if (blocked?.state.kind !== "check" || !result.waiting)
+    await unblock(`${nightly.tag_name} is no longer blocked in ${pull.html_url}.`);
+  return { changed: true, sha, candidate, pull: pull.html_url, review: result };
 }
 
-module.exports = { selectNightly, syncUpstreamNightly, pushMirror };
+module.exports = { selectNightly, syncUpstreamNightly, pushMirror, listConflicts };

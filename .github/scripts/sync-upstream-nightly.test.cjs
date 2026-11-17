@@ -21,16 +21,44 @@ function fixture() {
     existingRuns: false,
     calls: [],
     pull: undefined,
+    issues: [],
   };
+  const listForRepo = async () => {};
   const github = {
-    paginate: async () => [
-      {
-        tag_name: "v0.1.10-nightly.20261114.4669",
-        draft: false,
-        published_at: "2026-11-14T03:00:00Z",
-      },
-    ],
+    paginate: async (method) =>
+      method === listForRepo
+        ? state.issues.filter((issue) => issue.state === "open")
+        : [
+            {
+              tag_name: "v0.1.10-nightly.20261114.4669",
+              draft: false,
+              published_at: "2026-11-14T03:00:00Z",
+            },
+          ],
     rest: {
+      issues: {
+        listForRepo,
+        create: async ({ title, body, assignees }) => {
+          state.calls.push(["issue", assignees]);
+          const number = 100 + state.issues.length;
+          state.issues.push({
+            number,
+            title,
+            body,
+            state: "open",
+            html_url: `#${number}`,
+            user: { login: "github-actions[bot]" },
+          });
+          return { data: state.issues.at(-1) };
+        },
+        update: async ({ issue_number, title, body, state: issueState }) => {
+          state.calls.push(["issue-update"]);
+          const issue = state.issues.find((item) => item.number === issue_number);
+          if (title) Object.assign(issue, { title, body });
+          if (issueState) issue.state = issueState;
+        },
+        createComment: async () => {},
+      },
       repos: {
         listReleases: () => {},
         getBranch: async ({ branch }) => {
@@ -45,6 +73,7 @@ function fixture() {
         }),
         compareCommitsWithBasehead: async ({ basehead }) => ({
           data: {
+            merge_base_commit: { sha: OLD },
             status:
               basehead === `${UPSTREAM}...${MAIN}`
                 ? state.contained
@@ -55,7 +84,8 @@ function fixture() {
         }),
         merge: async ({ head }) => {
           state.calls.push(["merge", head]);
-          if (state.conflict) throw Object.assign(new Error("conflict"), { status: 409 });
+          if (state.conflict && head === UPSTREAM)
+            throw Object.assign(new Error("conflict"), { status: 409 });
           const before = state.branches["sync/upstream-nightly"];
           if (head === MAIN || before === CANDIDATE) return { status: 204 };
           state.branches["sync/upstream-nightly"] = CANDIDATE;
@@ -107,6 +137,11 @@ function fixture() {
       sha: MAIN,
     },
     token: "test-token",
+    checks: async () => undefined,
+    conflictsOf: ({ base, ours, theirs }) => {
+      state.calls.push(["conflicts", base, ours, theirs]);
+      return ["apps/desktop/src/app/DesktopApp.test.ts"];
+    },
     push: async ({ sha, expectedSha }) => {
       assert.equal(expectedSha, OLD);
       state.calls.push(["push", sha]);
@@ -164,8 +199,8 @@ test("does no CI work for already incorporated releases or existing candidate ru
   await syncUpstreamNightly({ ...input, retry: true });
   assert.equal(state.calls.filter(([kind]) => kind === "dispatch").length, 3);
 });
-test("does not propose or dispatch an unverified, conflicted, or raced candidate", async () => {
-  for (const field of ["verified", "conflict", "stale", "mergeRace"]) {
+test("does not propose or dispatch an unverified or raced candidate", async () => {
+  for (const field of ["verified", "stale", "mergeRace"]) {
     const { state, input } = fixture();
     state[field] = field !== "verified";
     await assert.rejects(syncUpstreamNightly(input));
@@ -173,6 +208,70 @@ test("does not propose or dispatch an unverified, conflicted, or raced candidate
       state.calls.some(([kind]) => kind === "dispatch" || kind === "pr"),
       false,
     );
+  }
+});
+test("reports a conflict once in an assigned issue, waits without retrying it, and closes it once resolved", async () => {
+  const { state, input } = fixture();
+  state.conflict = true;
+  assert.match((await syncUpstreamNightly(input)).reason, /conflicts\. Resolution needed: #100/);
+  assert.deepEqual(
+    state.calls.filter(([kind]) => kind === "issue"),
+    [["issue", ["alexander-cato"]]],
+  );
+  assert.deepEqual(
+    state.calls.find(([kind]) => kind === "conflicts"),
+    ["conflicts", OLD, MAIN, UPSTREAM],
+  );
+  assert.match(state.issues[0].body, /- `apps\/desktop\/src\/app\/DesktopApp\.test\.ts`/);
+  const merges = () => state.calls.filter(([kind]) => kind === "merge").length;
+  const attempted = merges();
+  assert.match(
+    (await syncUpstreamNightly(input)).reason,
+    /Waiting for the conflict resolution in #100/,
+  );
+  assert.equal(merges(), attempted);
+  await syncUpstreamNightly({ ...input, retry: true });
+  assert.equal(merges(), attempted + 2);
+  state.conflict = false;
+  state.branches["sync/upstream-nightly"] = OLD;
+  assert.equal((await syncUpstreamNightly(input)).changed, true);
+  assert.equal(state.issues[0].state, "closed");
+  assert.equal(state.calls.filter(([kind]) => kind === "issue").length, 1);
+});
+
+test("reports a failed required check in the blocked issue, with or without automatic merging, until a rerun passes", async () => {
+  const results = {
+    failed: {
+      merged: false,
+      failed: true,
+      reason: "Agent context budget failed on the exact candidate.",
+    },
+    rerunning: {
+      merged: false,
+      waiting: true,
+      reason: "Waiting for Agent context budget on the exact candidate.",
+    },
+    passed: undefined,
+  };
+  for (const autoMerge of [true, false]) {
+    const { state, input } = fixture();
+    let current;
+    const status = async () =>
+      autoMerge
+        ? (current ?? { merged: false, reason: "Waiting for a Codex code review." })
+        : current;
+    const run = (result) => {
+      current = results[result];
+      return syncUpstreamNightly({ ...input, autoMerge, review: status, checks: status });
+    };
+    assert.match((await run("failed")).review.reason, /Fix needed: #100$/);
+    assert.match(state.issues[0].body, /pull\/7/);
+    await run("rerunning");
+    assert.equal(state.issues[0].state, "open");
+    await run("failed");
+    assert.equal(state.calls.filter(([kind]) => kind.startsWith("issue")).length, 1);
+    await run("passed");
+    assert.equal(state.issues[0].state, "closed");
   }
 });
 
