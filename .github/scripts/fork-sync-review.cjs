@@ -23,11 +23,7 @@ function completedCodeReview(comments, head) {
     return false;
   }
   const review = state?.code_review;
-  return (
-    review?.commit_sha === head &&
-    review.status === "completed" &&
-    review.has_unresolved_findings === false
-  );
+  return review?.commit_sha === head && review.status === "completed" ? review : undefined;
 }
 
 // Returns undefined once every required check passed on the exact head.
@@ -44,7 +40,7 @@ async function requiredChecks({ github, head }) {
       .filter((item) => item.name === name && item.head_sha === head && item.app?.id === 15368)
       .sort((a, b) => b.id - a.id)[0];
     if (check?.status === "completed" && check.conclusion !== "success")
-      return { failed: true, reason: `${name} failed on the exact candidate.` };
+      return { blocked: true, reason: `${name} failed on the exact candidate.` };
     if (check?.status !== "completed")
       waiting ??= { waiting: true, reason: `Waiting for ${name} on the exact candidate.` };
   }
@@ -71,10 +67,10 @@ async function mergeReviewedNightly({ github, merger, pullNumber, head, base }) 
     issue_number: pullNumber,
     per_page: 100,
   });
-  if (!completedCodeReview(comments, head))
-    return pending(
-      "Waiting for a completed current-head Codex code review with no unresolved findings.",
-    );
+  const review = completedCodeReview(comments, head);
+  if (!review) return pending("Waiting for a completed current-head Codex code review.");
+  // Codex keeps reporting findings after their threads are resolved, so resolved threads decide.
+  let threadCount = 0;
   let after = null;
   let done = false;
   for (let page = 0; page < 20; page++) {
@@ -92,11 +88,14 @@ async function mergeReviewedNightly({ github, merger, pullNumber, head, base }) 
     if (current?.headRefOid !== head || current.baseRefOid !== base)
       return pending("PR source or base changed during review verification.");
     const threads = current.reviewThreads;
-    if (
-      !Array.isArray(threads?.nodes) ||
-      threads.nodes.some((thread) => thread?.isResolved !== true)
-    )
-      return pending("Review threads are unresolved or unavailable.");
+    if (!Array.isArray(threads?.nodes)) return pending("Review threads are unavailable.");
+    if (threads.nodes.some((thread) => thread?.isResolved !== true))
+      return {
+        merged: false,
+        blocked: true,
+        reason: "Review findings need a fix or a written dismissal, then a resolved thread.",
+      };
+    threadCount += threads.nodes.length;
     if (threads.pageInfo?.hasNextPage === false) {
       done = true;
       break;
@@ -106,6 +105,8 @@ async function mergeReviewedNightly({ github, merger, pullNumber, head, base }) 
     after = threads.pageInfo.endCursor;
   }
   if (!done) return pending("Review thread list exceeds the verification limit.");
+  if (review.has_unresolved_findings !== false && threadCount === 0)
+    return pending("Codex reported findings without review threads to resolve.");
   const { data: main } = await github.rest.repos.getBranch({ ...REPOSITORY, branch: "main" });
   const { data: source } = await github.rest.repos.getCommit({ ...REPOSITORY, ref: head });
   if (

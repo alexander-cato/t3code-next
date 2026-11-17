@@ -23,33 +23,30 @@ function reviews() {
     },
   };
 }
-test("requires a current-head code review, trusted numeric bot identity, and explicit no-unresolved findings", () => {
-  assert.equal(completedCodeReview([summary(reviews())], HEAD), true);
+test("requires a completed current-head code review from the trusted numeric bot identity", () => {
+  assert.ok(completedCodeReview([summary(reviews())], HEAD));
   for (const mutate of [
     (value) => (value.code_review.status = "running"),
     (value) => (value.code_review.commit_sha = BASE),
-    (value) => (value.code_review.has_unresolved_findings = null),
-    (value) => (value.code_review.has_unresolved_findings = true),
     (value) => delete value.code_review,
   ]) {
     const state = reviews();
     mutate(state);
-    assert.equal(completedCodeReview([summary(state)], HEAD), false);
+    assert.ok(!completedCodeReview([summary(state)], HEAD));
   }
-  assert.equal(
-    completedCodeReview(
+  assert.ok(
+    !completedCodeReview(
       [summary(reviews(), { user: { id: 1, login: "chatgpt-codex-connector[bot]", type: "Bot" } })],
       HEAD,
     ),
-    false,
   );
-  assert.equal(completedCodeReview([summary(reviews()), summary({}, { id: 2 })], HEAD), false);
+  assert.ok(!completedCodeReview([summary(reviews()), summary({}, { id: 2 })], HEAD));
   for (const body of [
     "<!-- codex-review-state:v1 invalid -->",
     "x".repeat(100001),
     summary(reviews()).body.repeat(2),
   ]) {
-    assert.equal(completedCodeReview([summary(reviews(), { body })], HEAD), false);
+    assert.ok(!completedCodeReview([summary(reviews(), { body })], HEAD));
   }
 });
 function fixture() {
@@ -109,7 +106,9 @@ function fixture() {
             headRefOid: HEAD,
             baseRefOid: BASE,
             reviewThreads: {
-              nodes: [{ isResolved: state.resolved || (state.secondPage && state.page === 1) }],
+              nodes: state.noThreads
+                ? []
+                : [{ isResolved: state.resolved || (state.secondPage && state.page === 1) }],
               pageInfo: { hasNextPage: state.secondPage && state.page === 1, endCursor: "next" },
             },
           },
@@ -131,6 +130,8 @@ function fixture() {
 }
 test("merges only a fully reviewed candidate, pinning the head and using the App merge client", async () => {
   const { state, input } = fixture();
+  // Codex still reports findings after their threads are resolved.
+  state.review.code_review.has_unresolved_findings = true;
   assert.equal((await mergeReviewedNightly(input)).merged, true);
   assert.deepEqual(state.merged, [
     {
@@ -144,24 +145,28 @@ test("merges only a fully reviewed candidate, pinning the head and using the App
   ]);
 });
 test("leaves the PR open for review, check, discussion, or main races without relying on older success", async () => {
-  // A failed check is reported as failed even while the Codex review is still running.
-  const failed = [
+  // A failed check is reported as blocked even while the Codex review is still running.
+  const blocked = [
     (state) => state.checks.push({ ...state.checks[2], id: 2, conclusion: "failure" }),
     (state) => {
       state.review.code_review.status = "running";
       state.checks.push({ ...state.checks[0], id: 2, conclusion: "failure" });
     },
-  ];
-  for (const alter of [
-    (state) => (state.review.code_review.status = "running"),
-    (state) => (state.checks = state.checks.filter((check) => check.name !== "Security check")),
-    ...failed,
-    (state) => (state.checks[0].app.id = 1),
     (state) => (state.resolved = false),
     (state) => {
       state.resolved = false;
       state.secondPage = true;
     },
+  ];
+  for (const alter of [
+    (state) => (state.review.code_review.status = "running"),
+    (state) => (state.checks = state.checks.filter((check) => check.name !== "Security check")),
+    ...blocked,
+    (state) => {
+      state.review.code_review.has_unresolved_findings = true;
+      state.noThreads = true;
+    },
+    (state) => (state.checks[0].app.id = 1),
     (state) => (state.base = HEAD),
     (state) => (state.protected = false),
   ]) {
@@ -169,7 +174,7 @@ test("leaves the PR open for review, check, discussion, or main races without re
     alter(state);
     const result = await mergeReviewedNightly(input);
     assert.equal(result.merged, false);
-    assert.equal(result.failed, failed.includes(alter) || undefined);
+    assert.equal(result.blocked, blocked.includes(alter) || undefined);
     assert.equal(state.merged.length, 0);
   }
 });

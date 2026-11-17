@@ -116,8 +116,9 @@ function blockedIssue(state) {
         "The next sync run uses the pushed resolution, opens the nightly PR, and closes this issue.",
       ]
     : [
-        `Fix the failure on ${pull}, on \`sync/upstream-nightly\` or through \`main\`. The sync merges the`,
-        "fixed candidate and closes this issue; run the sync with `retry` to re-dispatch unchanged checks.",
+        `Fix a failed check on ${pull} through \`sync/upstream-nightly\` or \`main\`. Fix each review`,
+        "finding or reply with why it stays, then resolve its thread. The sync merges once unblocked and",
+        "closes this issue; run the sync with `retry` to re-dispatch unchanged checks.",
       ];
   return {
     title: `Nightly sync blocked: ${tag}`,
@@ -365,7 +366,7 @@ async function syncUpstreamNightly({
         base: main,
       })
     : await checks({ github, head: candidate }).then((status) =>
-        status?.failed
+        status?.blocked
           ? { merged: false, ...status }
           : {
               merged: false,
@@ -373,7 +374,7 @@ async function syncUpstreamNightly({
               reason: "Automatic nightly merging is disabled.",
             },
       );
-  if (result.failed) {
+  if (result.blocked) {
     const issue = await block({ reason: result.reason, candidate, pull: pull.html_url });
     return {
       changed: true,
