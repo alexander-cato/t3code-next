@@ -144,11 +144,18 @@ test("merges only a fully reviewed candidate, pinning the head and using the App
   ]);
 });
 test("leaves the PR open for review, check, discussion, or main races without relying on older success", async () => {
+  // A failed check is reported as failed even while the Codex review is still running.
+  const failed = [
+    (state) => state.checks.push({ ...state.checks[2], id: 2, conclusion: "failure" }),
+    (state) => {
+      state.review.code_review.status = "running";
+      state.checks.push({ ...state.checks[0], id: 2, conclusion: "failure" });
+    },
+  ];
   for (const alter of [
     (state) => (state.review.code_review.status = "running"),
     (state) => (state.checks = state.checks.filter((check) => check.name !== "Security check")),
-    (state) => state.checks.push({ ...state.checks[2], id: 2, conclusion: "failure" }),
-    (state) => state.checks.push({ ...state.checks[0], id: 2, conclusion: "failure" }),
+    ...failed,
     (state) => (state.checks[0].app.id = 1),
     (state) => (state.resolved = false),
     (state) => {
@@ -160,7 +167,9 @@ test("leaves the PR open for review, check, discussion, or main races without re
   ]) {
     const { state, input } = fixture();
     alter(state);
-    assert.equal((await mergeReviewedNightly(input)).merged, false);
+    const result = await mergeReviewedNightly(input);
+    assert.equal(result.merged, false);
+    assert.equal(result.failed, failed.includes(alter) || undefined);
     assert.equal(state.merged.length, 0);
   }
 });

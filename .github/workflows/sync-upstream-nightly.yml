@@ -31,7 +31,7 @@ jobs:
       pull-requests: write
       actions: write
       checks: read
-      issues: read
+      issues: write
     steps:
       - name: Check out pinned public source without credentials
         env:
