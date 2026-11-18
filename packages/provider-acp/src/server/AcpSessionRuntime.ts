@@ -1708,12 +1708,15 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
 
   const acp = yield* Effect.service(EffectAcpClient.AcpClient).pipe(Effect.provide(acpContext));
 
-  // Counts applied `config_option_update`s; see setConfigOption.
+  // Count applied `config_option_update`s and `current_mode_update`s; see setConfigOption.
   const configOptionUpdates = yield* Ref.make(0);
+  const modeUpdates = yield* Ref.make(0);
   const processSessionUpdate = (notification: EffectAcpSchema.SessionNotification) =>
     (notification.update.sessionUpdate === "config_option_update"
       ? Ref.update(configOptionUpdates, (count) => count + 1)
-      : Effect.void
+      : notification.update.sessionUpdate === "current_mode_update"
+        ? Ref.update(modeUpdates, (count) => count + 1)
+        : Effect.void
     ).pipe(
       Effect.andThen(
         handleSessionUpdate({
@@ -1902,14 +1905,18 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
       | EffectAcpSchema.LoadSessionResponse
       | EffectAcpSchema.NewSessionResponse
       | EffectAcpSchema.ResumeSessionResponse,
+    syncMode = true,
   ) {
     const configOptions = sessionConfigOptionsFromSetup(response);
     yield* SubscriptionRef.set(configOptionsRef, configOptions);
-    // A mode set as a config option is the session's mode, as for a pushed config_option_update.
-    yield* Ref.update(
-      modeStateRef,
-      (current) => parseSessionModeState({ configOptions }) ?? current,
-    );
+    // A mode set as a config option is the session's mode, as for a pushed config_option_update,
+    // unless the agent reported a newer mode while the write was in flight.
+    if (syncMode) {
+      yield* Ref.update(
+        modeStateRef,
+        (current) => parseSessionModeState({ configOptions }) ?? current,
+      );
+    }
     yield* Queue.offer(eventQueue, {
       _tag: "ConfigOptionsUpdated",
       configOptions,
@@ -2100,17 +2107,19 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
             // newer than its result: Kiro 2.32 answers a `model` write
             // without `model`, then advertises it, and that update can be
             // handled before this fiber resumes. The result then stays out.
-            return Ref.get(configOptionUpdates).pipe(
-              Effect.flatMap((updatesBefore) =>
+            return Effect.all([Ref.get(configOptionUpdates), Ref.get(modeUpdates)]).pipe(
+              Effect.flatMap(([updatesBefore, modesBefore]) =>
                 runLoggedRequest(
                   "session/set_config_option",
                   requestPayload,
                   acp.agent.setSessionConfigOption(requestPayload),
                 ).pipe(
                   Effect.tap((response) =>
-                    Ref.get(configOptionUpdates).pipe(
-                      Effect.flatMap((updatesNow) =>
-                        updatesNow === updatesBefore ? updateConfigOptions(response) : Effect.void,
+                    Effect.all([Ref.get(configOptionUpdates), Ref.get(modeUpdates)]).pipe(
+                      Effect.flatMap(([updatesNow, modesNow]) =>
+                        updatesNow === updatesBefore
+                          ? updateConfigOptions(response, modesNow === modesBefore)
+                          : Effect.void,
                       ),
                     ),
                   ),
