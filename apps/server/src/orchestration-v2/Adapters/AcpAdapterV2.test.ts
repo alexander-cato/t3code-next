@@ -1,11 +1,13 @@
 import {
   extractCopilotSubagentUpdate,
   makeCopilotSubagentRouting,
-  normalizeDevinSessionUpdate,
-  normalizeDevinToolCall,
-  extractDevinSubagentUpdate,
   makeAcpRegistryAdapterV2,
 } from "@t3tools/provider-acp-registry/testing";
+import {
+  extractDevinSubagentUpdate,
+  normalizeDevinSessionUpdate,
+  normalizeDevinToolCall,
+} from "@t3tools/provider-devin/server/devinAcp";
 import { AcpRegistrySettings } from "@t3tools/provider-acp-registry/settings";
 import { AcpRegistryCatalog } from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
 import { decodeAcpReplayTranscript, makeAcpReplayRuntime } from "./AcpAdapterV2.testkit.ts";
