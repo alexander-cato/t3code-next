@@ -1,11 +1,13 @@
 import {
   extractCopilotSubagentUpdate,
   makeCopilotSubagentRouting,
-  normalizeDevinSessionUpdate,
-  normalizeDevinToolCall,
-  extractDevinSubagentUpdate,
   makeAcpRegistryAdapterV2,
 } from "@t3tools/provider-acp-registry/testing";
+import {
+  extractDevinSubagentUpdate,
+  normalizeDevinSessionUpdate,
+  normalizeDevinToolCall,
+} from "@t3tools/provider-devin/server/devinAcp";
 import { AcpRegistrySettings } from "@t3tools/provider-acp-registry/settings";
 import { AcpRegistryCatalog } from "@t3tools/provider-acp-registry/server/AcpRegistrySupport";
 import { decodeAcpReplayTranscript, makeAcpReplayRuntime } from "./AcpAdapterV2.testkit.ts";
@@ -31,6 +33,7 @@ import {
   type OrchestrationV2UserInputQuestion,
   type ProviderOptionDescriptor,
   type ProviderUserInputAnswers,
+  type RuntimeMode,
 } from "@t3tools/contracts";
 import { GrokSettings } from "@t3tools/provider-grok/settings";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -2777,6 +2780,84 @@ describe("AcpAdapterV2", () => {
         ["composer-2"],
         "the native model was left on B, so the turn on A must set it back first",
       );
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.live("moves a session that starts above the managed ceiling under it", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const mockAgentPath = yield* bundledMockAgentPath;
+      const modesFor = (
+        maxRuntimeMode?: RuntimeMode,
+        agentEnvironment?: Record<string, string>,
+        pickedMode?: string,
+      ) =>
+        Effect.gen(function* () {
+          const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+          const instanceId = ProviderInstanceId.make("acp-test-ceiling-start-mode");
+          const adapter = yield* makeAcpAdapterV2({
+            instanceId,
+            flavor: {
+              driver: ACP_TEST_DRIVER,
+              capabilities: AcpProviderCapabilitiesV2,
+              runtimeModeForSessionMode: (modeId) =>
+                modeId === "code" ? "full-access" : "approval-required",
+              makeRuntime: makeMockRuntime({
+                childProcessSpawner,
+                mockAgentPath,
+                protocolEvents,
+                // The agent's own default, or a resumed session, already skips approvals.
+                environment: { T3_ACP_INITIAL_MODE: "code", ...agentEnvironment },
+              }),
+            },
+            selfInvocation: yield* resolveSelfInvocation(),
+          });
+          yield* adapter.openSession({
+            threadId: ThreadId.make("thread-acp-ceiling-start-mode"),
+            providerSessionId: ProviderSessionId.make("provider-session-acp-ceiling-start-mode"),
+            modelSelection: {
+              instanceId,
+              model: "default",
+              ...(pickedMode === undefined ? {} : { options: [{ id: "mode", value: pickedMode }] }),
+            },
+            runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+              runtimeMode: "approval-required",
+              interactionMode: "default",
+              cwd: process.cwd(),
+              ...(maxRuntimeMode === undefined ? {} : { maxRuntimeMode }),
+            }),
+          });
+          const modes: Array<unknown> = [];
+          for (const event of yield* Queue.takeAll(protocolEvents)) {
+            if (event.direction !== "outgoing") continue;
+            const method = rawProtocolMethod(event);
+            if (method === "session/set_mode") modes.push(rawProtocolRequestParam(event, "modeId"));
+            if (
+              method === "session/set_config_option" &&
+              rawProtocolRequestParam(event, "configId") === "mode"
+            ) {
+              modes.push(rawProtocolRequestParam(event, "value"));
+            }
+          }
+          return modes;
+        }).pipe(Effect.scoped);
+
+      assert.deepEqual(yield* modesFor("auto-accept-edits"), ["ask"]);
+      // Without a ceiling the agent keeps its own mode.
+      assert.deepEqual(yield* modesFor(), []);
+      // A pick under the ceiling, set as a config option, stands instead of the fallback.
+      assert.deepEqual(yield* modesFor("auto-accept-edits", undefined, "architect"), ["architect"]);
+      // An agent that stays above the ceiling after the switch cannot run.
+      const stuck = yield* Effect.exit(
+        modesFor("auto-accept-edits", { T3_ACP_IGNORE_MODE_CHANGES: "1" }),
+      );
+      assert.isTrue(Exit.isFailure(stuck));
+      // The agent leaves the allowed mode while the switch is in flight; its stale reply must not
+      // count as the session's mode.
+      const reverted = yield* Effect.exit(
+        modesFor("auto-accept-edits", { T3_ACP_PUSH_MODE_DURING_SET: "code" }),
+      );
+      assert.isTrue(Exit.isFailure(reverted));
     }).pipe(Effect.provide(layerTest)),
   );
 
