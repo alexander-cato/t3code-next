@@ -91,6 +91,10 @@ const openCompactionPromptOrdinals = new Set(
   (process.env.T3_ACP_OPEN_COMPACTION_PROMPT_ORDINALS ?? "").split(",").map(Number),
 );
 const failSetModeConfigOption = process.env.T3_ACP_FAIL_SET_MODE_CONFIG_OPTION === "1";
+// Accepts mode changes without applying them, like an agent that keeps its own mode.
+const ignoreModeChanges = process.env.T3_ACP_IGNORE_MODE_CHANGES === "1";
+// Switches to this mode and pushes it while a mode write is in flight, then answers that write.
+const pushModeDuringSet = process.env.T3_ACP_PUSH_MODE_DURING_SET;
 const emitEmptyDefaultAgentOption = process.env.T3_ACP_EMIT_EMPTY_DEFAULT_AGENT_OPTION === "1";
 const promptResponseText = process.env.T3_ACP_PROMPT_RESPONSE_TEXT;
 const promptDelayMs = Number(process.env.T3_ACP_PROMPT_DELAY_MS ?? "0");
@@ -836,7 +840,7 @@ const program = Effect.gen(function* () {
           },
         );
       }
-      if (request.configId === "mode" && typeof request.value === "string") {
+      if (request.configId === "mode" && typeof request.value === "string" && !ignoreModeChanges) {
         currentModeId = request.value;
       }
       if (request.configId === "model" && typeof request.value === "string") {
@@ -854,9 +858,15 @@ const program = Effect.gen(function* () {
       if (request.configId === "fast") {
         currentFast = request.value === true || request.value === "true";
       }
-      return {
-        configOptions: configOptions(),
-      };
+      const reply = { configOptions: configOptions() };
+      if (pushModeDuringSet !== undefined && request.configId === "mode") {
+        currentModeId = pushModeDuringSet;
+        yield* agent.client.sessionUpdate({
+          sessionId: request.sessionId,
+          update: { sessionUpdate: "config_option_update", configOptions: configOptions() },
+        });
+      }
+      return reply;
     }),
   );
 
@@ -2013,7 +2023,7 @@ const program = Effect.gen(function* () {
         : sessionId;
 
     if (typeof nextModeId === "string" && nextModeId.trim()) {
-      currentModeId = nextModeId.trim();
+      if (!ignoreModeChanges) currentModeId = nextModeId.trim();
       return agent.client
         .sessionUpdate({
           sessionId: requestedSessionId,

@@ -2787,7 +2787,11 @@ describe("AcpAdapterV2", () => {
     Effect.gen(function* () {
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const mockAgentPath = yield* bundledMockAgentPath;
-      const modesFor = (maxRuntimeMode?: RuntimeMode) =>
+      const modesFor = (
+        maxRuntimeMode?: RuntimeMode,
+        agentEnvironment?: Record<string, string>,
+        pickedMode?: string,
+      ) =>
         Effect.gen(function* () {
           const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
           const instanceId = ProviderInstanceId.make("acp-test-ceiling-start-mode");
@@ -2803,7 +2807,7 @@ describe("AcpAdapterV2", () => {
                 mockAgentPath,
                 protocolEvents,
                 // The agent's own default, or a resumed session, already skips approvals.
-                environment: { T3_ACP_INITIAL_MODE: "code" },
+                environment: { T3_ACP_INITIAL_MODE: "code", ...agentEnvironment },
               }),
             },
             selfInvocation: yield* resolveSelfInvocation(),
@@ -2811,7 +2815,11 @@ describe("AcpAdapterV2", () => {
           yield* adapter.openSession({
             threadId: ThreadId.make("thread-acp-ceiling-start-mode"),
             providerSessionId: ProviderSessionId.make("provider-session-acp-ceiling-start-mode"),
-            modelSelection: { instanceId, model: "default" },
+            modelSelection: {
+              instanceId,
+              model: "default",
+              ...(pickedMode === undefined ? {} : { options: [{ id: "mode", value: pickedMode }] }),
+            },
             runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
               runtimeMode: "approval-required",
               interactionMode: "default",
@@ -2837,6 +2845,19 @@ describe("AcpAdapterV2", () => {
       assert.deepEqual(yield* modesFor("auto-accept-edits"), ["ask"]);
       // Without a ceiling the agent keeps its own mode.
       assert.deepEqual(yield* modesFor(), []);
+      // A pick under the ceiling, set as a config option, stands instead of the fallback.
+      assert.deepEqual(yield* modesFor("auto-accept-edits", undefined, "architect"), ["architect"]);
+      // An agent that stays above the ceiling after the switch cannot run.
+      const stuck = yield* Effect.exit(
+        modesFor("auto-accept-edits", { T3_ACP_IGNORE_MODE_CHANGES: "1" }),
+      );
+      assert.isTrue(Exit.isFailure(stuck));
+      // The agent leaves the allowed mode while the switch is in flight; its stale reply must not
+      // count as the session's mode.
+      const reverted = yield* Effect.exit(
+        modesFor("auto-accept-edits", { T3_ACP_PUSH_MODE_DURING_SET: "code" }),
+      );
+      assert.isTrue(Exit.isFailure(reverted));
     }).pipe(Effect.provide(layerTest)),
   );
 

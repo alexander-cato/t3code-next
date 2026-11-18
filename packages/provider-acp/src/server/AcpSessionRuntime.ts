@@ -1905,6 +1905,11 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
   ) {
     const configOptions = sessionConfigOptionsFromSetup(response);
     yield* SubscriptionRef.set(configOptionsRef, configOptions);
+    // A mode set as a config option is the session's mode, as for a pushed config_option_update.
+    yield* Ref.update(
+      modeStateRef,
+      (current) => parseSessionModeState({ configOptions }) ?? current,
+    );
     yield* Queue.offer(eventQueue, {
       _tag: "ConfigOptionsUpdated",
       configOptions,
@@ -2764,12 +2769,15 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
         yield* updateCurrentModeId(modeId);
         return {} satisfies EffectAcpSchema.SetSessionModeResponse;
       }
+      const before = yield* Ref.get(modeStateRef);
       const response = yield* setConfigOption(modeConfigOption?.id ?? "mode", modeId);
-      const reported = parseSessionModeState({ configOptions: response.configOptions });
-      if (reported === undefined) {
+      // A reply that reports the mode already set the state, and a newer pushed update replaces the
+      // state object; only an uninformative reply with no update in between falls back to the ack.
+      if (
+        parseSessionModeState({ configOptions: response.configOptions }) === undefined &&
+        (yield* Ref.get(modeStateRef)) === before
+      ) {
         yield* updateCurrentModeId(modeId);
-      } else {
-        yield* updateCurrentModeId(reported.currentModeId);
       }
       return {} satisfies EffectAcpSchema.SetSessionModeResponse;
     }),
