@@ -33,6 +33,7 @@ import {
   type OrchestrationV2UserInputQuestion,
   type ProviderOptionDescriptor,
   type ProviderUserInputAnswers,
+  type RuntimeMode,
 } from "@t3tools/contracts";
 import { GrokSettings } from "@t3tools/provider-grok/settings";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -2779,6 +2780,63 @@ describe("AcpAdapterV2", () => {
         ["composer-2"],
         "the native model was left on B, so the turn on A must set it back first",
       );
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.live("moves a session that starts above the managed ceiling under it", () =>
+    Effect.gen(function* () {
+      const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const mockAgentPath = yield* bundledMockAgentPath;
+      const modesFor = (maxRuntimeMode?: RuntimeMode) =>
+        Effect.gen(function* () {
+          const protocolEvents = yield* Queue.unbounded<EffectAcpProtocol.AcpProtocolLogEvent>();
+          const instanceId = ProviderInstanceId.make("acp-test-ceiling-start-mode");
+          const adapter = yield* makeAcpAdapterV2({
+            instanceId,
+            flavor: {
+              driver: ACP_TEST_DRIVER,
+              capabilities: AcpProviderCapabilitiesV2,
+              runtimeModeForSessionMode: (modeId) =>
+                modeId === "code" ? "full-access" : "approval-required",
+              makeRuntime: makeMockRuntime({
+                childProcessSpawner,
+                mockAgentPath,
+                protocolEvents,
+                // The agent's own default, or a resumed session, already skips approvals.
+                environment: { T3_ACP_INITIAL_MODE: "code" },
+              }),
+            },
+            selfInvocation: yield* resolveSelfInvocation(),
+          });
+          yield* adapter.openSession({
+            threadId: ThreadId.make("thread-acp-ceiling-start-mode"),
+            providerSessionId: ProviderSessionId.make("provider-session-acp-ceiling-start-mode"),
+            modelSelection: { instanceId, model: "default" },
+            runtimePolicy: ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+              runtimeMode: "approval-required",
+              interactionMode: "default",
+              cwd: process.cwd(),
+              ...(maxRuntimeMode === undefined ? {} : { maxRuntimeMode }),
+            }),
+          });
+          const modes: Array<unknown> = [];
+          for (const event of yield* Queue.takeAll(protocolEvents)) {
+            if (event.direction !== "outgoing") continue;
+            const method = rawProtocolMethod(event);
+            if (method === "session/set_mode") modes.push(rawProtocolRequestParam(event, "modeId"));
+            if (
+              method === "session/set_config_option" &&
+              rawProtocolRequestParam(event, "configId") === "mode"
+            ) {
+              modes.push(rawProtocolRequestParam(event, "value"));
+            }
+          }
+          return modes;
+        }).pipe(Effect.scoped);
+
+      assert.deepEqual(yield* modesFor("auto-accept-edits"), ["ask"]);
+      // Without a ceiling the agent keeps its own mode.
+      assert.deepEqual(yield* modesFor(), []);
     }).pipe(Effect.provide(layerTest)),
   );
 

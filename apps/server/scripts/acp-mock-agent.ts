@@ -115,7 +115,7 @@ let currentModeId = antigravityProfile
   ? (process.env.T3_ACP_INITIAL_MODE ?? "default")
   : copilotModesProfile
     ? copilotModeId("agent")
-    : "ask";
+    : (process.env.T3_ACP_INITIAL_MODE ?? "ask");
 let currentModelId = antigravityProfile ? "gemini-test-low" : "default";
 let parameterizedModelPicker = false;
 let currentReasoning = "medium";

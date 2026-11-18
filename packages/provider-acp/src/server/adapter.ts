@@ -7897,6 +7897,36 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
               nativeBuildConfigurationBySessionId.delete(startResult.sessionId);
             }
           }
+          // The filter above only refuses picks; the agent's own default or a resumed session can
+          // still sit above the ceiling, so move it to the mode closest to the runtime mode.
+          const grantOf = flavor.runtimeModeForSessionMode;
+          const finalModeState = yield* runtime.getModeState;
+          if (
+            ceiling !== undefined &&
+            ceiling !== "full-access" &&
+            grantOf !== undefined &&
+            finalModeState !== undefined
+          ) {
+            const withinPolicy = (modeId: string, limit: RuntimeMode) => {
+              const granted = grantOf(modeId);
+              return granted !== undefined && !isRuntimeModeAbove(granted, limit);
+            };
+            if (!withinPolicy(finalModeState.currentModeId, ceiling)) {
+              const allowed = finalModeState.availableModes
+                .map((mode) => mode.id)
+                .filter((modeId) => withinPolicy(modeId, ceiling));
+              const fallback =
+                allowed.find((modeId) => grantOf(modeId) === runtimePolicy.runtimeMode) ??
+                allowed.find((modeId) => withinPolicy(modeId, runtimePolicy.runtimeMode)) ??
+                allowed[0];
+              if (fallback === undefined) {
+                return yield* EffectAcpErrors.AcpRequestError.invalidParams(
+                  "None of the agent's session modes stays within the administrator's permission limit.",
+                );
+              }
+              yield* runtime.setMode(fallback);
+            }
+          }
           yield* validateModelSelection(modelSelection);
           yield* Ref.set(configuredRuntimeMode, runtimePolicy.runtimeMode);
           yield* (
