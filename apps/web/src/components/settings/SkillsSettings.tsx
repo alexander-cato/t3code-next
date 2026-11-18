@@ -11,8 +11,9 @@ import type {
   SkillSourcePreview,
   SkillTarget,
 } from "@t3tools/contracts";
+import { T, useGT } from "gt-react";
 import { CloudUploadIcon, DownloadIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 
 import { useEnvironmentQuery } from "../../state/query";
 import { formatRelativeTimeLabel } from "../../timestampFormat";
@@ -75,11 +76,12 @@ function SkillLibraryPanel({ environmentId }: { readonly environmentId: Environm
   const query = useEnvironmentQuery(skillLibraryList({ environmentId, input: {} }));
   const canManage = useAtomValue(skillLibraryMutate.permissionAtom(environmentId));
   const mutate = useAtomCommand(skillLibraryMutate);
+  const gt = useGT();
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [installing, setInstalling] = useState(false);
   const [savingScenario, setSavingScenario] = useState(false);
-  const section = searchableSetting("skills");
+  const section = { ...searchableSetting("skills"), title: gt("Skills") };
   const snapshot = query.data;
 
   const run: Run = async (mutation) => {
@@ -99,11 +101,11 @@ function SkillLibraryPanel({ environmentId }: { readonly environmentId: Environm
           </div>
         ) : (
           <SettingsRow
-            title="Could not load skills"
+            title={gt("Could not load skills")}
             description={query.error}
             control={
               <Button size="xs" variant="outline" onClick={query.refresh}>
-                Retry
+                {gt("Retry")}
               </Button>
             }
           />
@@ -118,8 +120,10 @@ function SkillLibraryPanel({ environmentId }: { readonly environmentId: Environm
       {snapshot.canImportSkillsManager ? (
         <SettingsSection title="skills-manager.app">
           <SettingsRow
-            title="Import from skills-manager.app"
-            description="Brings over where each skill came from and your scenarios. Links stay as they are. Quit skills-manager.app afterwards so it stops changing them."
+            title={gt("Import from skills-manager.app")}
+            description={gt(
+              "Brings over where each skill came from and your scenarios. Links stay as they are. Quit skills-manager.app afterwards so it stops changing them.",
+            )}
             control={
               <Button
                 size="xs"
@@ -127,7 +131,7 @@ function SkillLibraryPanel({ environmentId }: { readonly environmentId: Environm
                 disabled={disabled}
                 onClick={() => void run({ _tag: "importSkillsManager" })}
               >
-                Import
+                {gt("Import")}
               </Button>
             }
           />
@@ -140,8 +144,8 @@ function SkillLibraryPanel({ environmentId }: { readonly environmentId: Environm
         onSave={() => setSavingScenario(true)}
         onDelete={(name) =>
           setConfirmation({
-            title: `Delete scenario ${name}?`,
-            description: "The skills stay linked as they are now.",
+            title: gt("Delete scenario {name}?", { name }),
+            description: gt("The skills stay linked as they are now."),
             mutation: { _tag: "deleteScenario", name },
           })
         }
@@ -156,13 +160,15 @@ function SkillLibraryPanel({ environmentId }: { readonly environmentId: Environm
               disabled={disabled}
               title={
                 snapshot.updatesCheckedAt
-                  ? `Last checked ${formatRelativeTimeLabel(snapshot.updatesCheckedAt)}`
+                  ? gt("Last checked {time}", {
+                      time: formatRelativeTimeLabel(snapshot.updatesCheckedAt),
+                    })
                   : undefined
               }
               onClick={() => void run({ _tag: "checkUpdates" })}
             >
               <RefreshCwIcon className="size-3" />
-              {busy === "checkUpdates" ? "Checking…" : "Check for updates"}
+              {busy === "checkUpdates" ? gt("Checking…") : gt("Check for updates")}
             </Button>
             <Button
               size="xs"
@@ -171,7 +177,7 @@ function SkillLibraryPanel({ environmentId }: { readonly environmentId: Environm
               onClick={() => setInstalling(true)}
             >
               <PlusIcon className="size-3" />
-              Install
+              {gt("Install")}
             </Button>
           </div>
         }
@@ -182,8 +188,11 @@ function SkillLibraryPanel({ environmentId }: { readonly environmentId: Environm
           run={run}
           onDelete={(skill) =>
             setConfirmation({
-              title: `Delete ${skill.name}?`,
-              description: `This deletes ${skill.catalogPath ?? skill.name}, its links, and its place in every scenario. Tools' own copies stay.`,
+              title: gt("Delete {name}?", { name: skill.name }),
+              description: gt(
+                "This deletes {path}, its links, and its place in every scenario. Tools' own copies stay.",
+                { path: skill.catalogPath ?? skill.name },
+              ),
               mutation: { _tag: "delete", name: skill.name },
             })
           }
@@ -219,9 +228,10 @@ function BackupSection({
   readonly busy: string | null;
   readonly run: Run;
 }) {
+  const gt = useGT();
   return (
     <SettingsSection
-      title="Backup"
+      title={gt("Backup")}
       headerAction={
         <Button
           size="xs"
@@ -230,18 +240,20 @@ function BackupSection({
           onClick={() => void run({ _tag: "backUp" })}
         >
           <CloudUploadIcon className="size-3" />
-          {busy === "backUp" ? "Backing up…" : "Back up now"}
+          {busy === "backUp" ? gt("Backing up…") : gt("Back up now")}
         </Button>
       }
     >
       <SettingsRow
-        title="Back up to git"
-        description="The catalog is a git repository. Commit and push it shortly after each change, and every 12 hours for edits made elsewhere."
+        title={gt("Back up to git")}
+        description={gt(
+          "The catalog is a git repository. Commit and push it shortly after each change, and every 12 hours for edits made elsewhere.",
+        )}
         status={
           backup.error
             ? backup.error
             : backup.lastBackupAt
-              ? `Backed up ${formatRelativeTimeLabel(backup.lastBackupAt)}`
+              ? gt("Backed up {time}", { time: formatRelativeTimeLabel(backup.lastBackupAt) })
               : undefined
         }
         control={
@@ -251,7 +263,7 @@ function BackupSection({
             onCheckedChange={(checked) =>
               void run({ _tag: "setBackup", enabled: Boolean(checked) })
             }
-            aria-label="Back up to git"
+            aria-label={gt("Back up to git")}
           />
         }
       />
@@ -272,15 +284,18 @@ function ScenarioSection({
   readonly onSave: () => void;
   readonly onDelete: (name: string) => void;
 }) {
+  const gt = useGT();
   const active = snapshot.activeScenario;
   return (
-    <SettingsSection title="Scenario">
+    <SettingsSection title={gt("Scenario")}>
       <SettingsRow
-        title="Active scenario"
+        title={gt("Active scenario")}
         description={
           active === null
-            ? "Save the current links as a scenario to switch between sets of skills."
-            : "Toggles below also change this scenario. Switching relinks every tool to match the one you pick."
+            ? gt("Save the current links as a scenario to switch between sets of skills.")
+            : gt(
+                "Toggles below also change this scenario. Switching relinks every tool to match the one you pick.",
+              )
         }
         control={
           <div className="flex items-center gap-1">
@@ -292,8 +307,8 @@ function ScenarioSection({
                   if (name && name !== active) void run({ _tag: "activateScenario", name });
                 }}
               >
-                <SelectTrigger aria-label="Active scenario" size="sm" className="w-40">
-                  <SelectValue>{active ?? "None"}</SelectValue>
+                <SelectTrigger aria-label={gt("Active scenario")} size="sm" className="w-40">
+                  <SelectValue>{active ?? gt("None")}</SelectValue>
                 </SelectTrigger>
                 <SelectPopup>
                   {snapshot.scenarios.map((scenario) => (
@@ -305,13 +320,13 @@ function ScenarioSection({
               </Select>
             ) : null}
             <Button size="xs" variant="outline" disabled={disabled} onClick={onSave}>
-              Save as…
+              {gt("Save as…")}
             </Button>
             {active !== null ? (
               <Button
                 size="icon-sm"
                 variant="ghost"
-                aria-label={`Delete scenario ${active}`}
+                aria-label={gt("Delete scenario {name}", { name: active })}
                 disabled={disabled}
                 onClick={() => onDelete(active)}
               >
@@ -336,6 +351,7 @@ function SkillList({
   readonly run: Run;
   readonly onDelete: (skill: SkillLibraryEntry) => void;
 }) {
+  const gt = useGT();
   const [filter, setFilter] = useState("");
   const needle = filter.trim().toLowerCase();
   const skills = needle
@@ -350,18 +366,26 @@ function SkillList({
   return (
     <>
       <SettingsRow
-        title={`${snapshot.skills.filter((skill) => skill.catalogPath).length} skills in ${snapshot.catalogDirectory}`}
+        title={gt("{count, plural, one {# skill in {path}} other {# skills in {path}}}", {
+          count: snapshot.skills.filter((skill) => skill.catalogPath).length,
+          path: snapshot.catalogDirectory,
+        })}
         description={
           updates > 0
-            ? `${updates} ${updates === 1 ? "update" : "updates"} available. Updating replaces local edits.`
-            : "Turn a tool on to link the catalog copy into its skills folder. Locked tools hold their own copy, which T3 Code leaves alone."
+            ? gt(
+                "{count, plural, one {# update available. Updating replaces local edits.} other {# updates available. Updating replaces local edits.}}",
+                { count: updates },
+              )
+            : gt(
+                "Turn a tool on to link the catalog copy into its skills folder. Locked tools hold their own copy, which T3 Code leaves alone.",
+              )
         }
         control={
           <Input
             size="sm"
             type="search"
-            placeholder="Filter skills"
-            aria-label="Filter skills"
+            placeholder={gt("Filter skills")}
+            aria-label={gt("Filter skills")}
             value={filter}
             onChange={(event) => setFilter(event.currentTarget.value)}
           />
@@ -369,8 +393,10 @@ function SkillList({
       />
       {snapshot.skills.length === 0 ? (
         <SettingsRow
-          title="No skills yet"
-          description="Install skills from a git repository, or add folders with a SKILL.md to the catalog."
+          title={gt("No skills yet")}
+          description={gt(
+            "Install skills from a git repository, or add folders with a SKILL.md to the catalog.",
+          )}
         />
       ) : (
         skills.map((skill) => (
@@ -406,13 +432,15 @@ function SkillRow({
   readonly run: Run;
   readonly onDelete: () => void;
 }) {
+  const gt = useGT();
   const adoptFrom = skill.catalogPath
     ? undefined
     : snapshot.targets.find((target) => skill.targets[target.id] === "external");
   let status: ReactNode = null;
-  if (skill.update?.status === "available") status = <Badge variant="info">Update available</Badge>;
+  if (skill.update?.status === "available")
+    status = <Badge variant="info">{gt("Update available")}</Badge>;
   if (skill.update?.status === "error")
-    status = <Badge variant="warning">Update check failed</Badge>;
+    status = <Badge variant="warning">{gt("Update check failed")}</Badge>;
 
   return (
     <SettingsRow
@@ -435,15 +463,18 @@ function SkillRow({
               disabled={disabled}
               onClick={() => void run({ _tag: "update", name: skill.name })}
             >
-              Update
+              {gt("Update")}
             </Button>
           ) : null}
           {adoptFrom ? (
             <Button
               size="icon-sm"
               variant="ghost"
-              aria-label={`Copy ${skill.name} from ${adoptFrom.displayName} into the catalog`}
-              title={`Copy from ${adoptFrom.displayName} into the catalog`}
+              aria-label={gt("Copy {name} from {tool} into the catalog", {
+                name: skill.name,
+                tool: adoptFrom.displayName,
+              })}
+              title={gt("Copy from {tool} into the catalog", { tool: adoptFrom.displayName })}
               disabled={disabled}
               onClick={() => void run({ _tag: "adopt", name: skill.name, target: adoptFrom.id })}
             >
@@ -454,7 +485,7 @@ function SkillRow({
             <Button
               size="icon-sm"
               variant="ghost"
-              aria-label={`Delete ${skill.name}`}
+              aria-label={gt("Delete {name}", { name: skill.name })}
               disabled={disabled}
               onClick={onDelete}
             >
@@ -490,6 +521,7 @@ function TargetToggle({
   readonly disabled: boolean;
   readonly run: Run;
 }) {
+  const gt = useGT();
   const state = skill.targets[target.id] ?? "off";
   const togglable = state === "linked" || (state === "off" && skill.catalogPath !== undefined);
   return (
@@ -498,7 +530,11 @@ function TargetToggle({
       variant="pill"
       pressed={state !== "off"}
       disabled={disabled || !togglable}
-      aria-label={`${skill.name} for ${target.displayName}${state === "external" ? " (its own copy)" : ""}`}
+      aria-label={
+        state === "external"
+          ? gt("{name} for {tool} (its own copy)", { name: skill.name, tool: target.displayName })
+          : gt("{name} for {tool}", { name: skill.name, tool: target.displayName })
+      }
       onPressedChange={(enabled) =>
         void run({ _tag: "setTarget", name: skill.name, target: target.id, enabled })
       }
@@ -517,6 +553,7 @@ function ConfirmDialog({
   readonly run: Run;
   readonly onClose: () => void;
 }) {
+  const gt = useGT();
   const [busy, setBusy] = useState(false);
   return (
     <AlertDialog
@@ -533,7 +570,7 @@ function ConfirmDialog({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogClose render={<Button variant="ghost" disabled={busy} />}>
-              Cancel
+              {gt("Cancel")}
             </AlertDialogClose>
             <Button
               variant="destructive"
@@ -545,7 +582,7 @@ function ConfirmDialog({
                 if (done) onClose();
               }}
             >
-              Delete
+              {gt("Delete")}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>
@@ -589,21 +626,31 @@ function InstallDialogPopup({
   readonly run: Run;
   readonly onClose: () => void;
 }) {
+  const gt = useGT();
   const previewSource = useAtomCommand(skillLibraryPreviewSource, { reportFailure: false });
   const [url, setUrl] = useState("");
-  const [preview, setPreview] = useState<SkillSourcePreview | null>(null);
+  // Install uses the URL that was previewed, so the list always matches what gets installed.
+  const latestPreview = useRef(0);
+  const [preview, setPreview] = useState<(SkillSourcePreview & { readonly url: string }) | null>(
+    null,
+  );
   const [picked, setPicked] = useState<ReadonlySet<SkillName>>(new Set());
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
 
   const find = async () => {
+    const request = ++latestPreview.current;
     setBusy(true);
     setFailure(null);
     setPreview(null);
-    const result = await previewSource({ environmentId, input: { url: url.trim() } });
+    setPicked(new Set());
+    const previewed = url.trim();
+    const result = await previewSource({ environmentId, input: { url: previewed } });
     setBusy(false);
+    // The URL changed while this was loading, so its result no longer matches the input.
+    if (request !== latestPreview.current) return;
     if (result._tag === "Success") {
-      setPreview(result.value);
+      setPreview({ ...result.value, url: previewed });
       setPicked(
         new Set(
           result.value.candidates.filter((entry) => !entry.exists).map((entry) => entry.name),
@@ -612,12 +659,13 @@ function InstallDialogPopup({
       return;
     }
     const error = squashAtomCommandFailure(result);
-    setFailure(error instanceof Error ? error.message : "The repository could not be read.");
+    setFailure(error instanceof Error ? error.message : gt("The repository could not be read."));
   };
 
   const install = async () => {
     setBusy(true);
-    const done = await run({ _tag: "install", url: url.trim(), names: [...picked] });
+    if (preview === null) return;
+    const done = await run({ _tag: "install", url: preview.url, names: [...picked] });
     setBusy(false);
     if (done) onClose();
   };
@@ -625,10 +673,12 @@ function InstallDialogPopup({
   return (
     <DialogPopup>
       <DialogHeader>
-        <DialogTitle>Install skills</DialogTitle>
+        <DialogTitle>{gt("Install skills")}</DialogTitle>
         <DialogDescription>
-          Paste a git repository or a GitHub folder link. Installed skills keep their source, so
-          they can be updated later.
+          <T>
+            Paste a git repository or a GitHub folder link. Installed skills keep their source, so
+            they can be updated later.
+          </T>
         </DialogDescription>
       </DialogHeader>
       <DialogPanel>
@@ -641,19 +691,24 @@ function InstallDialogPopup({
         >
           <Input
             autoFocus
-            aria-label="Repository URL"
+            aria-label={gt("Repository URL")}
             placeholder="https://github.com/owner/repo/tree/main/skills"
             value={url}
-            onChange={(event) => setUrl(event.currentTarget.value)}
+            onChange={(event) => {
+              setUrl(event.currentTarget.value);
+              latestPreview.current += 1;
+              setPreview(null);
+              setPicked(new Set());
+            }}
           />
           <Button type="submit" variant="outline" disabled={busy || !url.trim()}>
-            {busy && preview === null ? "Finding…" : "Find skills"}
+            {busy && preview === null ? gt("Finding…") : gt("Find skills")}
           </Button>
         </form>
         {failure ? <p className="text-sm text-destructive-foreground">{failure}</p> : null}
         {preview?.candidates.length === 0 ? (
           <p className="text-sm text-muted-foreground">
-            No folder with a SKILL.md was found there.
+            {gt("No folder with a SKILL.md was found there.")}
           </p>
         ) : null}
         {preview && preview.candidates.length > 0 ? (
@@ -674,7 +729,10 @@ function InstallDialogPopup({
                 <span className="min-w-0 text-sm">
                   <span className="font-medium">{candidate.name}</span>
                   {candidate.exists ? (
-                    <span className="text-muted-foreground"> · already in the catalog</span>
+                    <span className="text-muted-foreground">
+                      {" · "}
+                      {gt("already in the catalog")}
+                    </span>
                   ) : null}
                   {candidate.description ? (
                     <span className="block text-muted-foreground">{candidate.description}</span>
@@ -687,10 +745,14 @@ function InstallDialogPopup({
       </DialogPanel>
       <DialogFooter>
         <Button variant="ghost" disabled={busy} onClick={onClose}>
-          Cancel
+          {gt("Cancel")}
         </Button>
         <Button disabled={busy || picked.size === 0} onClick={() => void install()}>
-          {picked.size > 1 ? `Install ${picked.size} skills` : "Install"}
+          {picked.size > 1
+            ? gt("{count, plural, one {Install # skill} other {Install # skills}}", {
+                count: picked.size,
+              })
+            : gt("Install")}
         </Button>
       </DialogFooter>
     </DialogPopup>
@@ -719,6 +781,7 @@ function SaveScenarioDialog({
 }
 
 function SaveScenarioPopup({ run, onClose }: { readonly run: Run; readonly onClose: () => void }) {
+  const gt = useGT();
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
   const save = async () => {
@@ -736,16 +799,19 @@ function SaveScenarioPopup({ run, onClose }: { readonly run: Run; readonly onClo
         }}
       >
         <DialogHeader>
-          <DialogTitle>Save scenario</DialogTitle>
+          <DialogTitle>{gt("Save scenario")}</DialogTitle>
           <DialogDescription>
-            Saves which tools link each skill right now. A scenario with the same name is replaced.
+            <T>
+              Saves which tools link each skill right now. A scenario with the same name is
+              replaced.
+            </T>
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
           <Input
             autoFocus
-            aria-label="Scenario name"
-            placeholder="Work"
+            aria-label={gt("Scenario name")}
+            placeholder={gt("Work")}
             maxLength={64}
             value={name}
             onChange={(event) => setName(event.currentTarget.value)}
@@ -753,10 +819,10 @@ function SaveScenarioPopup({ run, onClose }: { readonly run: Run; readonly onClo
         </DialogPanel>
         <DialogFooter>
           <Button type="button" variant="ghost" disabled={busy} onClick={onClose}>
-            Cancel
+            {gt("Cancel")}
           </Button>
           <Button type="submit" disabled={busy || !name.trim()}>
-            Save
+            {gt("Save")}
           </Button>
         </DialogFooter>
       </form>

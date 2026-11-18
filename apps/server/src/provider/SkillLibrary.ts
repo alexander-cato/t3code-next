@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off
+// Effect's FileSystem.copy cannot keep symlink targets as written; Node's cp can.
 import {
   ProviderDriverKind,
   type ProviderInstanceId,
@@ -14,9 +16,11 @@ import {
   type SkillUpdateCheck,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import * as NodeFSP from "node:fs/promises";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -122,6 +126,12 @@ const TARGET_SPECS: ReadonlyArray<TargetSpec> = [
     displayName: "Antigravity",
     driver: ProviderDriverKind.make("antigravity"),
     home: homeDir(".gemini", "config"),
+  },
+  {
+    id: "fx" as SkillTargetId,
+    displayName: "fx",
+    driver: ProviderDriverKind.make("fx"),
+    home: homeDir(".fx"),
   },
   {
     id: "kiro" as SkillTargetId,
@@ -430,36 +440,53 @@ const make = Effect.gen(function* () {
       .makeTempDirectoryScoped({ prefix: "t3-skill-source-" })
       .pipe(Effect.mapError(filesystemError("Could not create a temporary folder")));
     const checkout = path.join(directory, "repo");
-    yield* git
-      .execute({
-        operation: "SkillLibrary.cloneSource",
-        cwd: directory,
-        args: [
-          "clone",
-          "--depth",
-          "1",
-          ...(source.ref ? ["--branch", source.ref] : []),
-          "--",
-          source.repository,
-          "repo",
-        ],
-        timeoutMs: CLONE_TIMEOUT_MS,
-        env: { GIT_TERMINAL_PROMPT: "0", LANGUAGE: "C" },
-      })
-      .pipe(
-        Effect.mapError((error) =>
-          fail("git-error", `Could not fetch ${source.repository}: ${error.message}`),
-        ),
-      );
-    return checkout;
+    yield* fileSystem
+      .makeDirectory(checkout)
+      .pipe(Effect.mapError(filesystemError("Could not create a temporary folder")));
+    // Fetching the exact ref works for branches, tags and commit permalinks alike.
+    for (const args of [
+      ["init", "--quiet"],
+      ["fetch", "--quiet", "--depth", "1", "--", source.repository, source.ref ?? "HEAD"],
+      ["checkout", "--quiet", "FETCH_HEAD"],
+    ]) {
+      yield* git
+        .execute({
+          operation: "SkillLibrary.cloneSource",
+          cwd: checkout,
+          args,
+          timeoutMs: CLONE_TIMEOUT_MS,
+          env: { GIT_TERMINAL_PROMPT: "0", LANGUAGE: "C" },
+        })
+        .pipe(
+          Effect.mapError((error) =>
+            fail("git-error", `Could not fetch ${source.repository}: ${error.message}`),
+          ),
+        );
+    }
+    // Real, so paths found inside it compare with resolved skill folders.
+    return yield* fileSystem.realPath(checkout).pipe(Effect.orElseSucceed(() => checkout));
   });
 
-  const sourceFolder = (checkout: string, relative: string | undefined) => {
+  const isInside = (root: string, folder: string) =>
+    folder === root || folder.startsWith(`${root}${path.sep}`);
+  /** The real folder, checked after links resolve so a source cannot reach outside the clone. */
+  const sourceFolder = Effect.fnUntraced(function* (
+    checkout: string,
+    relative: string | undefined,
+  ) {
+    const outside = fail("invalid-source", `'${relative}' is outside the repository.`);
     const folder = path.resolve(checkout, relative ?? ".");
-    return folder === checkout || folder.startsWith(`${checkout}${path.sep}`)
-      ? Effect.succeed(folder)
-      : Effect.fail(fail("invalid-source", `'${relative}' is outside the repository.`));
-  };
+    if (!isInside(checkout, folder)) return yield* outside;
+    const root = yield* fileSystem.realPath(checkout).pipe(Effect.orElseSucceed(() => checkout));
+    const real = yield* fileSystem
+      .realPath(folder)
+      .pipe(
+        Effect.mapError(() =>
+          fail("invalid-source", `'${relative ?? "."}' is not in the repository.`),
+        ),
+      );
+    return isInside(root, real) ? real : yield* outside;
+  });
 
   const previewIn = Effect.fn("SkillLibrary.previewIn")(function* (
     source: SkillSource,
@@ -519,13 +546,48 @@ const make = Effect.gen(function* () {
     return skill ? Effect.succeed(skill) : Effect.fail(notFound(name));
   };
 
-  const copyIntoCatalog = (snapshot: Scan, from: string, name: string) =>
-    fileSystem
+  /**
+   * Copies a skill folder without its git metadata, which the catalog's backup would nest. Links
+   * keep their written target, so a relative link stays inside the copy.
+   */
+  const copySkill = (from: string, to: string) =>
+    Effect.tryPromise({
+      try: () =>
+        NodeFSP.cp(from, to, {
+          recursive: true,
+          verbatimSymlinks: true,
+          errorOnExist: true,
+          force: false,
+        }),
+      catch: filesystemError(`Could not copy ${from}`),
+    }).pipe(
+      Effect.andThen(fileSystem.remove(path.join(to, ".git"), { recursive: true, force: true })),
+    );
+
+  /** Vacant means nothing at all, not even a dangling link. */
+  const isVacant = (entry: string) =>
+    fileSystem.readLink(entry).pipe(
+      Effect.as(false),
+      Effect.catch(() => exists(entry).pipe(Effect.map((found) => !found))),
+    );
+
+  const requireVacant = Effect.fnUntraced(function* (destination: string) {
+    if (!(yield* isVacant(destination))) {
+      return yield* fail("already-exists", `${destination} already exists.`);
+    }
+  });
+
+  const copyIntoCatalog = Effect.fnUntraced(function* (snapshot: Scan, from: string, name: string) {
+    const destination = path.join(snapshot.catalogDirectory, name);
+    // Also catches a non-skill folder, or one differing only in case on macOS.
+    yield* requireVacant(destination);
+    yield* fileSystem
       .makeDirectory(snapshot.catalogDirectory, { recursive: true })
       .pipe(
-        Effect.andThen(fileSystem.copy(from, path.join(snapshot.catalogDirectory, name))),
+        Effect.andThen(copySkill(from, destination)),
         Effect.mapError(filesystemError(`Could not copy '${name}' into the catalog`)),
       );
+  });
 
   const setTarget = Effect.fnUntraced(function* (
     snapshot: Scan,
@@ -611,30 +673,81 @@ const make = Effect.gen(function* () {
       snapshot.skills.filter((skill) => skill.catalogPath).map((skill) => skill.name),
     );
     const sources = { ...snapshot.manifest.sources };
+    const folded = names.map((name) => name.toLowerCase());
+    if (new Set(folded).size !== folded.length) {
+      return yield* fail("already-exists", "Two of the picked skills share a name.");
+    }
     yield* Effect.scoped(
       Effect.gen(function* () {
         const checkout = yield* cloneSource(source);
         const preview = yield* previewIn(source, checkout, catalogNames);
         for (const name of names) {
+          yield* requireVacant(path.join(snapshot.catalogDirectory, name));
           const candidate = preview.candidates.find((entry) => entry.name === name);
-          if (!candidate) return yield* fail("not-found", `${url} has no skill named '${name}'.`);
+          if (!candidate) {
+            const offered = preview.candidates.map((entry) => entry.name).join(", ") || "none";
+            return yield* fail(
+              "not-found",
+              `${url} has no skill named '${name}'. It offers: ${offered}.`,
+            );
+          }
           if (candidate.exists) {
             return yield* fail("already-exists", `The catalog already has '${name}'.`);
           }
         }
+        // Copies land in a staging folder on the catalog's filesystem and move in whole, so a
+        // failed copy never leaves a partial skill in the catalog.
+        const staging = yield* fileSystem
+          .makeDirectory(snapshot.catalogDirectory, { recursive: true })
+          .pipe(
+            Effect.andThen(
+              fileSystem.makeTempDirectoryScoped({
+                directory: snapshot.catalogDirectory,
+                prefix: ".t3-install-",
+              }),
+            ),
+            Effect.mapError(filesystemError("Could not create a staging folder")),
+          );
         for (const name of names) {
           const candidate = preview.candidates.find((entry) => entry.name === name);
-          yield* copyIntoCatalog(snapshot, path.join(checkout, candidate?.path ?? "."), name);
+          const from = yield* sourceFolder(checkout, candidate?.path);
+          yield* copySkill(from, path.join(staging, name)).pipe(
+            Effect.mapError(filesystemError(`Could not copy '${name}' into the catalog`)),
+          );
           sources[name] = {
             repository: source.repository,
             ...(source.ref ? { ref: source.ref } : {}),
             ...(candidate?.path ? { path: candidate.path } : {}),
           };
-          updateChecks.set(name, { status: "current" });
         }
+        // Cloning and copying stay cancellable; moving skills in and recording them in the
+        // manifest finish together or roll back together.
+        const placed: string[] = [];
+        yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            for (const name of names) {
+              const destination = path.join(snapshot.catalogDirectory, name);
+              yield* fileSystem
+                .rename(path.join(staging, name), destination)
+                .pipe(
+                  Effect.mapError(filesystemError(`Could not move '${name}' into the catalog`)),
+                );
+              placed.push(destination);
+            }
+            yield* saveManifest(snapshot.catalogDirectory, { ...snapshot.manifest, sources });
+          }).pipe(
+            Effect.onError(() =>
+              Effect.forEach(
+                placed,
+                (folder) => fileSystem.remove(folder, { recursive: true }).pipe(Effect.ignore),
+                { discard: true },
+              ),
+            ),
+          ),
+        );
+        for (const name of names) updateChecks.set(name, { status: "current" });
       }),
     );
-    yield* saveManifest(snapshot.catalogDirectory, { ...snapshot.manifest, sources });
   });
 
   const update = Effect.fnUntraced(function* (snapshot: Scan, name: SkillName) {
@@ -653,13 +766,42 @@ const make = Effect.gen(function* () {
             `${source.repository} no longer has a SKILL.md at '${source.path ?? "."}'.`,
           );
         }
-        // Replace in place: links point at this path, so it must stay.
-        yield* fileSystem
-          .remove(catalogPath, { recursive: true })
-          .pipe(
-            Effect.andThen(fileSystem.copy(folder, catalogPath)),
-            Effect.mapError(filesystemError(`Could not update ${catalogPath}`)),
-          );
+        // Links point at this path, so the new copy is staged on the same filesystem and swapped
+        // in; the scope removes the staging folder whether or not that succeeds.
+        const staging = yield* fileSystem
+          .makeTempDirectoryScoped({ directory: snapshot.catalogDirectory, prefix: ".t3-update-" })
+          .pipe(Effect.mapError(filesystemError("Could not create a staging folder")));
+        const staged = path.join(staging, name);
+        yield* copySkill(folder, staged).pipe(
+          Effect.mapError(filesystemError(`Could not update ${catalogPath}`)),
+        );
+        // The swap cannot be cancelled halfway. The old copy waits outside the staging folder,
+        // so if it cannot be put back it survives for the user to recover.
+        yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            const aside = yield* fileSystem
+              .makeTempDirectory({ directory: snapshot.catalogDirectory, prefix: ".t3-previous-" })
+              .pipe(Effect.mapError(filesystemError("Could not create a staging folder")));
+            const previous = path.join(aside, name);
+            const discardAside = fileSystem.remove(aside, { recursive: true }).pipe(Effect.ignore);
+            const movedAside = yield* Effect.exit(fileSystem.rename(catalogPath, previous));
+            if (Exit.isFailure(movedAside)) {
+              yield* discardAside;
+              return yield* fail("filesystem-error", `Could not update ${catalogPath}.`);
+            }
+            if (Exit.isSuccess(yield* Effect.exit(fileSystem.rename(staged, catalogPath)))) {
+              return yield* discardAside;
+            }
+            if (Exit.isFailure(yield* Effect.exit(fileSystem.rename(previous, catalogPath)))) {
+              return yield* fail(
+                "filesystem-error",
+                `Could not update ${catalogPath}. The previous copy is at ${previous}.`,
+              );
+            }
+            yield* discardAside;
+            return yield* fail("filesystem-error", `Could not update ${catalogPath}.`);
+          }),
+        );
       }),
     );
     updateChecks.set(name, { status: "current" });
@@ -681,12 +823,13 @@ const make = Effect.gen(function* () {
           Effect.gen(function* () {
             const checkout = yield* cloneSource(source);
             for (const skill of skills) {
-              const folder = yield* sourceFolder(checkout, skill.source?.path);
-              const same = (yield* isSkillDirectory(folder))
-                ? yield* sameSkillFiles(folder, skill.catalogPath ?? "").pipe(
-                    Effect.orElseSucceed(() => false),
-                  )
-                : false;
+              const found = yield* sourceFolder(checkout, skill.source?.path).pipe(Effect.option);
+              const same =
+                Option.isSome(found) && (yield* isSkillDirectory(found.value))
+                  ? yield* sameSkillFiles(found.value, skill.catalogPath ?? "").pipe(
+                      Effect.orElseSucceed(() => false),
+                    )
+                  : false;
               updateChecks.set(skill.name, { status: same ? "current" : "available" });
             }
           }),

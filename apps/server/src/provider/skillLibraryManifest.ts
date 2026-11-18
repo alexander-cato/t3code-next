@@ -54,10 +54,20 @@ export const writeManifest = Effect.fn("skillLibraryManifest.write")(function* (
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const file = path.join(catalog, MANIFEST_FILE);
-  const staged = `${file}.tmp`;
   yield* fileSystem.makeDirectory(catalog, { recursive: true });
-  yield* fileSystem.writeFileString(staged, `${yield* encodeManifest(manifest)}\n`);
-  yield* fileSystem.rename(staged, file);
+  const contents = `${yield* encodeManifest(manifest)}\n`;
+  // A fresh file, so nothing a synced catalog left behind can redirect the write; the scope
+  // removes its folder afterwards.
+  yield* Effect.scoped(
+    Effect.gen(function* () {
+      const staged = yield* fileSystem.makeTempFileScoped({
+        directory: catalog,
+        prefix: ".t3-skills-",
+      });
+      yield* fileSystem.writeFileString(staged, contents);
+      yield* fileSystem.rename(staged, file);
+    }),
+  );
 });
 
 const SkillsManagerSkill = Schema.Struct({

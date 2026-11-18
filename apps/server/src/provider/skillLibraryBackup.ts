@@ -1,5 +1,6 @@
 import { SkillLibraryError } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 
 import type * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 
@@ -49,11 +50,37 @@ export const backUpCatalog = Effect.fn("skillLibraryBackup.backUpCatalog")(funct
   const branch = (yield* run(["symbolic-ref", "--quiet", "--short", "HEAD"])).stdout.trim();
   if (!branch) return yield* gitError("the catalog repository is not on a branch.");
 
+  // Committing in the middle of the user's own merge, rebase, revert or cherry-pick would record
+  // it half done.
+  const fileSystem = yield* FileSystem.FileSystem;
+  for (const entry of [
+    "MERGE_HEAD",
+    "REBASE_HEAD",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+    "rebase-merge",
+    "rebase-apply",
+    "sequencer",
+  ]) {
+    const location = yield* succeed(["rev-parse", "--path-format=absolute", "--git-path", entry]);
+    if (yield* fileSystem.exists(location).pipe(Effect.orElseSucceed(() => false))) {
+      return yield* gitError("a merge, rebase or revert is in progress in the catalog repository.");
+    }
+  }
   const identity =
     (yield* run(["config", "user.email"])).stdout.trim() === ""
       ? ["-c", "user.name=T3 Code", "-c", "user.email=t3code@localhost"]
       : [];
-  yield* succeed(["add", "--all"]);
+  // T3's staging folders, including an old copy kept after a failed update, stay local.
+  yield* succeed([
+    "add",
+    "--all",
+    "--",
+    ".",
+    ...[".t3-install-*", ".t3-update-*", ".t3-previous-*", ".t3-skills-*"].map(
+      (pattern) => `:(exclude)${pattern}`,
+    ),
+  ]);
   if ((yield* run(["diff", "--cached", "--quiet"])).exitCode !== 0) {
     yield* succeed([...identity, "commit", "--quiet", "--message", COMMIT_MESSAGE]);
   }

@@ -16,21 +16,16 @@ const toFailure = (error: SkillLibraryError) =>
   });
 
 export const layer = McpToolAccess.toLayer(SkillsToolkit, {
-  t3_skills_read: McpToolAccess.reads(({ name, previewUrl }) =>
+  t3_skills_read: McpToolAccess.reads(({ name }) =>
     Effect.gen(function* () {
       const library = yield* SkillLibrary.SkillLibrary;
       const snapshot = yield* library.list.pipe(Effect.mapError(toFailure));
-      const preview =
-        previewUrl === undefined
-          ? undefined
-          : yield* library.previewSource(previewUrl).pipe(Effect.mapError(toFailure));
       return {
         ...snapshot,
         skills:
           name === undefined
             ? snapshot.skills
             : snapshot.skills.filter((skill) => skill.name === name),
-        ...(preview ? { preview } : {}),
       };
     }),
   ),

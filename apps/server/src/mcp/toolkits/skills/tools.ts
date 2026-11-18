@@ -3,8 +3,6 @@ import {
   SkillLibraryMutation,
   SkillLibrarySnapshot,
   SkillName,
-  SkillSourcePreview,
-  SkillSourceUrl,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
@@ -27,15 +25,11 @@ const shared = {
 const SkillsReadTool = Tool.make("t3_skills_read", {
   ...shared,
   description:
-    "List this machine's skill catalog: each skill's source, update status, and which coding tools link it, plus scenarios. `previewUrl` also lists the skills a git repository offers to install.",
+    "List this machine's skill catalog: each skill's source, update status, and which coding tools link it, plus scenarios.",
   parameters: Schema.Struct({
     name: Schema.optionalKey(SkillName.annotate({ description: "Only this skill." })),
-    previewUrl: Schema.optionalKey(SkillSourceUrl),
   }),
-  success: Schema.Struct({
-    ...SkillLibrarySnapshot.fields,
-    preview: Schema.optionalKey(SkillSourcePreview),
-  }),
+  success: SkillLibrarySnapshot,
 })
   .annotate(Tool.Readonly, true)
   .annotate(Tool.Destructive, false);
@@ -43,7 +37,7 @@ const SkillsReadTool = Tool.make("t3_skills_read", {
 const SkillsUpdateTool = Tool.make("t3_skills_update", {
   ...shared,
   description:
-    "Change the skill catalog, only when the user asks. Link or unlink a skill for a tool, install from a git URL, check for or apply updates, copy a tool's own skill into the catalog, delete, save/activate/delete scenarios, or turn on or run the catalog's git backup. Live full-access or default caller thread only.",
+    "Change the skill catalog, only when the user asks. Link or unlink a skill for a tool, install from a git URL (an unknown name returns the skills it offers), check for or apply updates, copy a tool's own skill into the catalog, delete, save/activate/delete scenarios, or turn on or run the catalog's git backup. Live full-access or default caller thread only.",
   parameters: SkillLibraryMutation,
   success: SkillLibrarySnapshot,
 }).annotate(Tool.Destructive, true);

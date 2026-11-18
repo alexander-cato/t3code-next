@@ -289,56 +289,94 @@ it.layer(layerTest)("SkillLibrary", (it) => {
       }),
   );
 
-  it.effect("installs from a git repository and applies upstream changes", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const git = yield* GitVcsDriver.GitVcsDriver;
-      const { home, mutate, preview, dirs } = yield* setup();
-      const repo = path.join(home, "upstream");
-      const commit = (message: string) =>
-        Effect.forEach(
+  it.effect.skipIf(!symlinksSupported)(
+    "installs from a git repository and applies upstream changes",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const git = yield* GitVcsDriver.GitVcsDriver;
+        const { home, mutate, preview, dirs } = yield* setup();
+        const repo = path.join(home, "upstream");
+        const commit = (message: string) =>
+          Effect.forEach(
+            [
+              ["add", "-A"],
+              ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", message],
+            ],
+            (args) => git.execute({ operation: "test", cwd: repo, args }),
+            { discard: true },
+          );
+        yield* writeSkill(path.join(repo, "skills", "alpha"), "v1\n");
+        // A relative link must still point inside the skill once the clone is gone.
+        yield* fileSystem.symlink("SKILL.md", path.join(repo, "skills", "alpha", "guide.md"));
+        yield* writeSkill(path.join(repo, "skills", "beta"));
+        yield* git.execute({ operation: "test", cwd: repo, args: ["init", "-q", "-b", "main"] });
+        yield* commit("one");
+        const url = `file://${repo}`;
+
+        const offered = yield* preview(url);
+        assert.deepEqual(
+          offered.candidates.map((candidate) => [candidate.name, candidate.path]),
+          [
+            ["alpha", "skills/alpha"],
+            ["beta", "skills/beta"],
+          ],
+        );
+
+        const installed = yield* mutate({ _tag: "install", url, names: [name("alpha")] });
+        assert.deepEqual(
+          installed.skills.map((skill) => skill.name),
+          ["alpha"],
+        );
+        assert.deepEqual(installed.skills[0]?.source, { repository: url, path: "skills/alpha" });
+        assert.strictEqual(
+          yield* fileSystem.readLink(path.join(dirs.catalog, "alpha", "guide.md")),
+          "SKILL.md",
+        );
+
+        yield* writeSkill(path.join(repo, "skills", "alpha"), "v2\n");
+        yield* commit("two");
+        const checked = yield* mutate({ _tag: "checkUpdates" });
+        assert.strictEqual(checked.skills[0]?.update?.status, "available");
+
+        const updated = yield* mutate({ _tag: "update", name: name("alpha") });
+        assert.strictEqual(updated.skills[0]?.update?.status, "current");
+        assert.include(
+          yield* fileSystem.readFileString(path.join(dirs.catalog, "alpha", "SKILL.md")),
+          "v2",
+        );
+
+        // Anything already under the name, even a dangling link, is never written through.
+        yield* fileSystem.symlink(path.join(home, "missing"), path.join(dirs.catalog, "beta"));
+        const occupied = yield* mutate({ _tag: "install", url, names: [name("beta")] }).pipe(
+          Effect.flip,
+        );
+        assert.strictEqual(occupied.reason, "already-exists");
+
+        // A repository that is itself a skill installs without its git metadata.
+        const solo = path.join(home, "solo");
+        yield* writeSkill(solo);
+        yield* git.execute({ operation: "test", cwd: solo, args: ["init", "-q", "-b", "main"] });
+        yield* Effect.forEach(
           [
             ["add", "-A"],
-            ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", message],
+            ["-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "solo"],
           ],
-          (args) => git.execute({ operation: "test", cwd: repo, args }),
+          (args) => git.execute({ operation: "test", cwd: solo, args }),
           { discard: true },
         );
-      yield* writeSkill(path.join(repo, "skills", "alpha"), "v1\n");
-      yield* writeSkill(path.join(repo, "skills", "beta"));
-      yield* git.execute({ operation: "test", cwd: repo, args: ["init", "-q", "-b", "main"] });
-      yield* commit("one");
-      const url = `file://${repo}`;
-
-      const offered = yield* preview(url);
-      assert.deepEqual(
-        offered.candidates.map((candidate) => [candidate.name, candidate.path]),
-        [
-          ["alpha", "skills/alpha"],
-          ["beta", "skills/beta"],
-        ],
-      );
-
-      const installed = yield* mutate({ _tag: "install", url, names: [name("alpha")] });
-      assert.deepEqual(
-        installed.skills.map((skill) => skill.name),
-        ["alpha"],
-      );
-      assert.deepEqual(installed.skills[0]?.source, { repository: url, path: "skills/alpha" });
-
-      yield* writeSkill(path.join(repo, "skills", "alpha"), "v2\n");
-      yield* commit("two");
-      const checked = yield* mutate({ _tag: "checkUpdates" });
-      assert.strictEqual(checked.skills[0]?.update?.status, "available");
-
-      const updated = yield* mutate({ _tag: "update", name: name("alpha") });
-      assert.strictEqual(updated.skills[0]?.update?.status, "current");
-      assert.include(
-        yield* fileSystem.readFileString(path.join(dirs.catalog, "alpha", "SKILL.md")),
-        "v2",
-      );
-    }),
+        yield* mutate({ _tag: "install", url: `file://${solo}`, names: [name("solo")] });
+        assert.isTrue(yield* fileSystem.exists(path.join(dirs.catalog, "solo", "SKILL.md")));
+        assert.isFalse(yield* fileSystem.exists(path.join(dirs.catalog, "solo", ".git")));
+        // Staging never outlives a change, so backup cannot commit it.
+        assert.deepEqual(
+          (yield* fileSystem.readDirectory(dirs.catalog)).filter(
+            (entry) => entry.startsWith(".t3-") && entry !== ".t3-skills.json",
+          ),
+          [],
+        );
+      }),
   );
 
   it.effect("backs up the catalog and catches up with another machine's backup", () =>
@@ -372,6 +410,8 @@ it.layer(layerTest)("SkillLibrary", (it) => {
       yield* run(other, "commit", "-qm", "beta");
       yield* run(other, "push", "-q", "origin", "main");
       yield* writeSkill(path.join(dirs.catalog, "gamma"));
+      // An old copy kept after a failed update is never pushed.
+      yield* writeSkill(path.join(dirs.catalog, ".t3-previous-x", "gamma"));
 
       const backedUp = yield* mutate({ _tag: "backUp" });
       assert.isUndefined(backedUp.backup?.error);
@@ -381,6 +421,10 @@ it.layer(layerTest)("SkillLibrary", (it) => {
         ["alpha", "beta", "gamma"],
       );
       yield* run(other, "fetch", "-q");
+      assert.notInclude(
+        (yield* run(other, "ls-tree", "-r", "--name-only", "origin/main")).stdout,
+        ".t3-previous-",
+      );
       assert.deepEqual(
         (yield* run(other, "log", "--format=%s", "origin/main")).stdout.trim().split("\n"),
         ["Back up skills", "beta", "Back up skills"],
