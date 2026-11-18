@@ -395,22 +395,30 @@ const make = Effect.gen(function* () {
     );
 
   // Tools that are providers rescan in the background; the caller already has the new snapshot.
-  const refreshChangedProviders = (before: Scan, after: Scan) => {
+  /** `updated` names a skill whose contents changed, so every tool linking it rescans too. */
+  const refreshChangedProviders = Effect.fn("SkillLibrary.refreshChangedProviders")(function* (
+    before: Scan,
+    after: Scan,
+    updated?: SkillName,
+  ) {
     const stateOf = (snapshot: Scan, target: SkillTargetId) =>
       JSON.stringify(snapshot.skills.map((skill) => [skill.name, skill.targets[target]]));
+    const updatedSkill = after.skills.find((skill) => skill.name === updated);
     const changed = after.targets.filter(
-      (target) => stateOf(before, target.id) !== stateOf(after, target.id),
+      (target) =>
+        stateOf(before, target.id) !== stateOf(after, target.id) ||
+        updatedSkill?.targets[target.id] === "linked",
     );
     const drivers = new Set(changed.flatMap((target) => (target.driver ? [target.driver] : [])));
     const instances = new Set(changed.flatMap((target) => after.instances.get(target.id) ?? []));
-    return Effect.all(
+    yield* Effect.all(
       [
         Effect.forEach(drivers, (driver) => providerRegistry.refresh(driver), { discard: true }),
         Effect.forEach(instances, (id) => providerRegistry.refreshInstance(id), { discard: true }),
       ],
       { discard: true },
-    ).pipe(Effect.forkIn(layerScope), Effect.asVoid);
-  };
+    ).pipe(Effect.forkIn(layerScope));
+  });
 
   const saveManifest = (catalog: string, manifest: SkillManifest) =>
     writeManifest(catalog, manifest).pipe(
@@ -581,12 +589,18 @@ const make = Effect.gen(function* () {
     const destination = path.join(snapshot.catalogDirectory, name);
     // Also catches a non-skill folder, or one differing only in case on macOS.
     yield* requireVacant(destination);
-    yield* fileSystem
-      .makeDirectory(snapshot.catalogDirectory, { recursive: true })
-      .pipe(
-        Effect.andThen(copySkill(from, destination)),
-        Effect.mapError(filesystemError(`Could not copy '${name}' into the catalog`)),
-      );
+    // Staged, so a copy that fails partway never leaves half a skill in the catalog.
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        yield* fileSystem.makeDirectory(snapshot.catalogDirectory, { recursive: true });
+        const staging = yield* fileSystem.makeTempDirectoryScoped({
+          directory: snapshot.catalogDirectory,
+          prefix: ".t3-install-",
+        });
+        yield* copySkill(from, path.join(staging, name));
+        yield* fileSystem.rename(path.join(staging, name), destination);
+      }),
+    ).pipe(Effect.mapError(filesystemError(`Could not copy '${name}' into the catalog`)));
   });
 
   const setTarget = Effect.fnUntraced(function* (
@@ -693,6 +707,12 @@ const make = Effect.gen(function* () {
           }
           if (candidate.exists) {
             return yield* fail("already-exists", `The catalog already has '${name}'.`);
+          }
+          if (preview.candidates.filter((entry) => entry.name === name).length > 1) {
+            return yield* fail(
+              "invalid-source",
+              `${url} has more than one skill named '${name}'. Install it from its folder's link.`,
+            );
           }
         }
         // Copies land in a staging folder on the catalog's filesystem and move in whole, so a
@@ -1015,7 +1035,11 @@ const make = Effect.gen(function* () {
       const before = yield* scan();
       yield* run(before, mutation);
       const after = yield* scan();
-      yield* refreshChangedProviders(before, after);
+      yield* refreshChangedProviders(
+        before,
+        after,
+        mutation._tag === "update" ? mutation.name : undefined,
+      );
       if (after.backup?.enabled && changesCatalog(mutation)) yield* scheduleBackUp;
       return toSnapshot(after);
     },

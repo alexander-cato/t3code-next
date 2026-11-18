@@ -714,7 +714,10 @@ function InstallDialogPopup({
         {preview && preview.candidates.length > 0 ? (
           <div className="grid gap-2">
             {preview.candidates.map((candidate) => (
-              <label key={candidate.name} className="flex cursor-pointer items-start gap-3">
+              <label
+                key={candidate.path ?? candidate.name}
+                className="flex cursor-pointer items-start gap-3"
+              >
                 <Checkbox
                   className="mt-0.5"
                   checked={picked.has(candidate.name)}

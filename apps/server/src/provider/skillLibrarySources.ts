@@ -47,6 +47,9 @@ const SKIPPED_DIRECTORIES = new Set(["node_modules", ".git"]);
 const MAX_DEPTH = 4;
 
 /** Skill folders at or under `base`, relative to `root`; a folder holding SKILL.md is not searched further. */
+/** Hidden folders repositories commonly keep their skills in, under `<folder>/skills`. */
+const SKILL_CONTAINERS: ReadonlySet<string> = new Set([".agents", ".claude"]);
+
 export const findSkillFolders = Effect.fn("skillLibrarySources.findSkillFolders")(function* (
   root: string,
   base: string,
@@ -71,7 +74,11 @@ export const findSkillFolders = Effect.fn("skillLibrarySources.findSkillFolders"
         .readDirectory(directory)
         .pipe(Effect.orElseSucceed(() => []));
       for (const entry of entries.toSorted()) {
-        if (entry.startsWith(".") || SKIPPED_DIRECTORIES.has(entry)) continue;
+        if (
+          (entry.startsWith(".") && !SKILL_CONTAINERS.has(entry)) ||
+          SKIPPED_DIRECTORIES.has(entry)
+        )
+          continue;
         const child = path.join(directory, entry);
         const info = yield* fileSystem.stat(child).pipe(Effect.option);
         if (info._tag === "Some" && info.value.type === "Directory") yield* walk(child, depth + 1);

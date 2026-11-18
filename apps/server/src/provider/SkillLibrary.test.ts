@@ -296,7 +296,7 @@ it.layer(layerTest)("SkillLibrary", (it) => {
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const git = yield* GitVcsDriver.GitVcsDriver;
-        const { home, mutate, preview, dirs } = yield* setup();
+        const { home, refreshed, mutate, preview, dirs } = yield* setup();
         const repo = path.join(home, "upstream");
         const commit = (message: string) =>
           Effect.forEach(
@@ -311,6 +311,9 @@ it.layer(layerTest)("SkillLibrary", (it) => {
         // A relative link must still point inside the skill once the clone is gone.
         yield* fileSystem.symlink("SKILL.md", path.join(repo, "skills", "alpha", "guide.md"));
         yield* writeSkill(path.join(repo, "skills", "beta"));
+        // Hidden skill folders that tools read are searched; others are not.
+        yield* writeSkill(path.join(repo, ".agents", "skills", "gamma"));
+        yield* writeSkill(path.join(repo, ".private", "delta"));
         yield* git.execute({ operation: "test", cwd: repo, args: ["init", "-q", "-b", "main"] });
         yield* commit("one");
         const url = `file://${repo}`;
@@ -319,6 +322,7 @@ it.layer(layerTest)("SkillLibrary", (it) => {
         assert.deepEqual(
           offered.candidates.map((candidate) => [candidate.name, candidate.path]),
           [
+            ["gamma", ".agents/skills/gamma"],
             ["alpha", "skills/alpha"],
             ["beta", "skills/beta"],
           ],
@@ -340,7 +344,17 @@ it.layer(layerTest)("SkillLibrary", (it) => {
         const checked = yield* mutate({ _tag: "checkUpdates" });
         assert.strictEqual(checked.skills[0]?.update?.status, "available");
 
+        // Updating a linked skill rescans the tools that read it, though no link changed.
+        yield* Queue.clear(refreshed);
+        yield* mutate({
+          _tag: "setTarget",
+          name: name("alpha"),
+          target: "claude_code",
+          enabled: true,
+        });
+        assert.strictEqual(yield* Queue.take(refreshed), claude);
         const updated = yield* mutate({ _tag: "update", name: name("alpha") });
+        assert.strictEqual(yield* Queue.take(refreshed), claude);
         assert.strictEqual(updated.skills[0]?.update?.status, "current");
         assert.include(
           yield* fileSystem.readFileString(path.join(dirs.catalog, "alpha", "SKILL.md")),
