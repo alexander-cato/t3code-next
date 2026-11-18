@@ -11,17 +11,20 @@ const AGENT_EMAILS = new Set([
 const GENERATED_BY_AGENT =
   /^(?:🤖\s*)?generated (?:with|by)\s+(?:claude(?: code)?|codex|cursor|github copilot|copilot|opencode|grok|antigravity)[.!]?$/i;
 
-function parseCoAuthor(text: string): { name: string; email: string } | undefined {
-  const prefix = /^co-authored-by:/i.exec(text)?.[0];
-  if (prefix === undefined || !text.endsWith(">")) return undefined;
+const CO_AUTHOR_PREFIX = /^co-authored-by:/i;
+
+function isAgentAuthor(text: string): boolean {
+  const prefix = CO_AUTHOR_PREFIX.exec(text);
+  if (prefix === null || !text.endsWith(">")) return false;
   const emailStart = text.lastIndexOf("<");
-  if (emailStart < prefix.length) return undefined;
-  const name = text.slice(prefix.length, emailStart).trim();
-  const email = text.slice(emailStart + 1, -1);
-  if (/[\r\n\u2028\u2029]/.test(name) || email.length === 0 || email.includes(">")) {
-    return undefined;
-  }
-  return { name, email: email.toLowerCase() };
+  if (emailStart < prefix[0].length) return false;
+  const email = text.slice(emailStart + 1, -1).toLowerCase();
+  if (!AGENT_EMAILS.has(email)) return false;
+  // GitHub's generic noreply address is also used by people; require Copilot's name.
+  return (
+    email !== "noreply@github.com" ||
+    /^(?:github )?copilot$/i.test(text.slice(prefix[0].length, emailStart).trim())
+  );
 }
 
 export function removeAgentCredits(message: string): string {
@@ -47,20 +50,19 @@ export function removeAgentCredits(message: string): string {
     }
     if (fence !== undefined) return true;
     const text = line.trim().replace(/^(?:[-*]\s+)/, "");
-    const author = parseCoAuthor(text);
-    // GitHub's generic noreply address is also used by people; require Copilot's name.
-    const email = author?.email;
-    const agentAuthor =
-      email !== undefined &&
-      AGENT_EMAILS.has(email) &&
-      (email !== "noreply@github.com" || /^github copilot$|^copilot$/i.test(author!.name));
-    const footer = text.replace(
-      /\[([^\]]+)\]\(https:\/\/(?:claude\.ai|claude\.com|www\.anthropic\.com|chatgpt\.com|openai\.com|cursor\.com|github\.com|opencode\.ai|x\.ai|antigravity\.google)(?:\/[^\s)]*)?\)/gi,
-      "$1",
-    );
-    if (!agentAuthor && !GENERATED_BY_AGENT.test(footer)) return true;
+    if (!isAgentAuthor(text)) {
+      const footer = text.replace(
+        /\[([^[\]\r\n]+)\]\(https:\/\/(?:claude\.ai|claude\.com|www\.anthropic\.com|chatgpt\.com|openai\.com|cursor\.com|github\.com|opencode\.ai|x\.ai|antigravity\.google)(?:\/[^\s)[\]]*)?\)/gi,
+        "$1",
+      );
+      if (!GENERATED_BY_AGENT.test(footer)) return true;
+    }
     removed = true;
     return false;
   });
-  return removed ? lines.join(newline).replace(/(?:\r?\n[ \t]*)+$/, "") : message;
+  if (!removed) return message;
+  while (lines.length > 1 && /^[ \t]*$/.test(lines.at(-1)!)) {
+    lines.pop();
+  }
+  return lines.join(newline);
 }
