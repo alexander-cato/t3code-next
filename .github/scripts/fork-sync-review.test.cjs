@@ -66,9 +66,18 @@ function fixture() {
     merged: [],
     page: 0,
     secondPage: false,
+    // Codex's inline review on the head, plus a body-only finding on an older candidate.
+    reviews: [
+      { id: 1, user: { id: 199175422 }, commit_id: HEAD },
+      { id: 2, user: { id: 199175422 }, commit_id: BASE },
+    ],
+    reviewComments: { 1: [{ id: 10 }], 2: [] },
+    signed: true,
   };
   const listComments = () => {},
-    listForRef = () => {};
+    listForRef = () => {},
+    listReviews = () => {},
+    listCommentsForReview = () => {};
   const github = {
     rest: {
       pulls: {
@@ -85,10 +94,18 @@ function fixture() {
             base: { sha: BASE, ref: "main" },
           },
         }),
+        listReviews,
+        listCommentsForReview,
       },
       repos: {
         getBranch: async () => ({
           data: { protected: state.protected, commit: { sha: state.base } },
+        }),
+        compareCommitsWithBasehead: async () => ({
+          data: {
+            total_commits: 1,
+            commits: [{ sha: HEAD, commit: { verification: { verified: state.signed } } }],
+          },
         }),
         getCommit: async () => ({
           data: { sha: HEAD, commit: { verification: { verified: true } } },
@@ -97,7 +114,12 @@ function fixture() {
       issues: { listComments },
       checks: { listForRef },
     },
-    paginate: async (method) => (method === listComments ? [summary(state.review)] : state.checks),
+    paginate: async (method, request) => {
+      if (method === listComments) return [summary(state.review)];
+      if (method === listReviews) return state.reviews;
+      if (method === listCommentsForReview) return state.reviewComments[request.review_id];
+      return state.checks;
+    },
     graphql: async () => {
       state.page++;
       return {
@@ -144,6 +166,11 @@ test("merges only a fully reviewed candidate, pinning the head and using the App
     },
   ]);
 });
+test("merges past a body-only head review when Codex reports no findings", async () => {
+  const { state, input } = fixture();
+  state.reviewComments[1] = [];
+  assert.equal((await mergeReviewedNightly(input)).merged, true);
+});
 test("leaves the PR open for review, check, discussion, or main races without relying on older success", async () => {
   // A failed check is reported as blocked even while the Codex review is still running.
   const blocked = [
@@ -157,6 +184,11 @@ test("leaves the PR open for review, check, discussion, or main races without re
       state.resolved = false;
       state.secondPage = true;
     },
+    (state) => {
+      state.review.code_review.has_unresolved_findings = true;
+      state.reviewComments[1] = [];
+    },
+    (state) => (state.signed = false),
   ];
   for (const alter of [
     (state) => (state.review.code_review.status = "running"),
