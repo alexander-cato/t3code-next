@@ -3,12 +3,7 @@ import {
   extractClaudeSubagentSessionEvent,
   isClaudeProvisionalSubagentTool,
 } from "./claudeAcp.ts";
-import {
-  normalizeDevinSessionUpdate,
-  normalizeDevinToolCall,
-  extractDevinSubagentUpdate,
-  devinAnswerablePermissionOptions,
-} from "./devinAcp.ts";
+import { DEVIN_ACP_FLAVOR } from "@t3tools/provider-devin/server/devinAcp";
 import { extractDroidElicitationForm } from "./droidAcp.ts";
 import { makeKimiPromptOutcomeWatch } from "./kimiAcp.ts";
 import { extractOmpElicitationForm } from "./ompAcp.ts";
@@ -269,18 +264,7 @@ export const makeAcpRegistryAdapterV2 = Effect.fn("makeAcpRegistryAdapterV2")(fu
           extractSubagentSessionEvent: extractClaudeSubagentSessionEvent,
         }
       : {}),
-    ...(isDevin
-      ? {
-          clientCapabilitiesMeta: {
-            "cognition.ai/subagentSupport": true,
-            "cognition.ai/messageGrouping": true,
-          },
-          normalizeSessionUpdate: normalizeDevinSessionUpdate,
-          normalizeToolCall: normalizeDevinToolCall,
-          extractSubagentUpdate: extractDevinSubagentUpdate,
-          answerablePermissionOptions: devinAnswerablePermissionOptions,
-        }
-      : {}),
+    ...(isDevin ? DEVIN_ACP_FLAVOR : {}),
     ...(copilotRouting === undefined
       ? {}
       : {

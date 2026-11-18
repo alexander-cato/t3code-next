@@ -114,7 +114,8 @@ export function skillInstructionsOpener(
   threadRef: ScopedThreadRef | null | undefined,
   skill: Pick<ServerProviderSkill, "path"> | undefined,
 ) {
-  if (!threadRef || !skill?.path) return undefined;
+  // Agent-advertised skills (`acp://skill/…`, `devin://skill/…`) have no file to open.
+  if (!threadRef || !skill?.path || /^[a-z][a-z\d+.-]*:\/\//i.test(skill.path)) return undefined;
   return () => useRightPanelStore.getState().openFile(threadRef, skill.path);
 }
 
