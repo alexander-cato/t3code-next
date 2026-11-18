@@ -7716,6 +7716,15 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           // Under a policy ceiling, a mode the user picks applies only when the flavor can place
           // it under the ceiling; an unknown mode could be the agent's own skip-approval mode.
           const ceiling = runtimePolicy.maxRuntimeMode;
+          const grantOf = flavor.runtimeModeForSessionMode;
+          const enforcedCeiling =
+            ceiling !== undefined && ceiling !== "full-access" && grantOf !== undefined
+              ? ceiling
+              : undefined;
+          const modeWithin = (modeId: string, limit: RuntimeMode) => {
+            const granted = grantOf?.(modeId);
+            return granted !== undefined && !isRuntimeModeAbove(granted, limit);
+          };
           const isModeChoice = (id: string) =>
             id === ACP_SESSION_MODE_OPTION_ID ||
             configOptions.some(
@@ -7873,7 +7882,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 effectiveModeState?.currentModeId !== nativeBuild.modeId &&
                 effectiveModeState?.availableModes.some(
                   (mode) => mode.id === nativeBuild.modeId,
-                ) === true
+                ) === true &&
+                // A pre-plan mode above the ceiling must not replace a pick under it.
+                (enforcedCeiling === undefined || modeWithin(nativeBuild.modeId, enforcedCeiling))
               ) {
                 yield* runtime.setMode(nativeBuild.modeId);
               }
@@ -7884,7 +7895,9 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 if (
                   option === undefined ||
                   option.type !== "select" ||
-                  (modeLocked && option.category === "mode")
+                  (option.category === "mode" &&
+                    (modeLocked ||
+                      (enforcedCeiling !== undefined && !modeWithin(saved.value, enforcedCeiling))))
                 )
                   continue;
                 const choices = option.options.flatMap((entry) =>
@@ -7895,6 +7908,30 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 }
               }
               nativeBuildConfigurationBySessionId.delete(startResult.sessionId);
+            }
+          }
+          // The filter above only refuses picks; the agent's own default or a resumed session can
+          // still sit above the ceiling, so move it to the mode closest to the runtime mode.
+          const finalModeState = yield* runtime.getModeState;
+          if (
+            enforcedCeiling !== undefined &&
+            finalModeState !== undefined &&
+            !modeWithin(finalModeState.currentModeId, enforcedCeiling)
+          ) {
+            const allowed = finalModeState.availableModes
+              .map((mode) => mode.id)
+              .filter((modeId) => modeWithin(modeId, enforcedCeiling));
+            const fallback =
+              allowed.find((modeId) => grantOf?.(modeId) === runtimePolicy.runtimeMode) ??
+              allowed.find((modeId) => modeWithin(modeId, runtimePolicy.runtimeMode)) ??
+              allowed[0];
+            if (fallback !== undefined) yield* runtime.setMode(fallback);
+            // The agent reports the mode it applied, which may not be the one requested.
+            const applied = yield* runtime.getModeState;
+            if (applied === undefined || !modeWithin(applied.currentModeId, enforcedCeiling)) {
+              return yield* EffectAcpErrors.AcpRequestError.invalidParams(
+                "None of the agent's session modes stays within the administrator's permission limit.",
+              );
             }
           }
           yield* validateModelSelection(modelSelection);

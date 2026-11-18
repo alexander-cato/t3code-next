@@ -117,9 +117,10 @@ When a registry agent asks for approval, T3 Code answers by the thread's
 **Auto-accept edits** approves edits and shows the rest, and **Auto** and **Full access** approve
 automatically. File reads and searches never wait for approval.
 
-Devin runs its commands through T3 Code's terminals, and those commands follow the thread's
-permission mode. For other agents, T3 Code shows the command, output, and exit status the agent
-reports but does not run or stop their terminals.
+A Devin instance added from the Registry runs its commands through T3 Code's terminals, and
+those commands follow the thread's permission mode. New Devin setups use the
+[Devin provider](./providers-devin.md). For other agents, T3 Code shows the command, output, and
+exit status the agent reports but does not run or stop their terminals.
 
 Registry agents can schedule work and use T3's MCP tools. Child-task presentation depends on what
 the agent exposes: ACP has no portable native subagent-lineage contract, so richer delegation views

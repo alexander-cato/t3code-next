@@ -202,6 +202,7 @@ computer.
 | Cursor      | Install [Cursor CLI](https://cursor.com/cli), then run `agent login`.                                                                                     |
 | Grok Build  | Install [Grok Build CLI](https://x.ai/cli), then run `grok login`.                                                                                        |
 | Kiro        | Install [Kiro CLI](https://kiro.dev/docs/cli/), then run `kiro-cli login`.                                                                                |
+| Devin       | Install [Devin CLI](https://docs.devin.ai/cli), then run `devin auth login`.                                                                              |
 | OpenCode    | Install [OpenCode](https://opencode.ai), then run `opencode auth login`.                                                                                  |
 | Antigravity | Install and sign in with Google from T3 Code's provider settings.                                                                                         |
 | Pi          | Install [Pi](./providers-pi.md#set-up-pi) with Node.js 22.19 or newer, then run `pi` and `/login`.                                                        |
@@ -245,7 +246,7 @@ their original values.
 
 For provider-specific setup and accounts, see [Codex](./providers-codex.md),
 [Claude](./providers-claude.md), [OpenCode](./providers-opencode.md),
-[Antigravity](./providers-antigravity.md), [Kiro](./providers-kiro.md),
+[Antigravity](./providers-antigravity.md), [Kiro](./providers-kiro.md), [Devin](./providers-devin.md),
 [Pi](./providers-pi.md), [Muse Code](./providers-muse.md), and [fx](./providers-fx.md).
 
 ### Provider check timeouts
@@ -278,6 +279,7 @@ greater than 2147483647; unset or invalid values keep the defaults.
 | Antigravity         | `T3CODE_ANTIGRAVITY_PROBE_TIMEOUT_MS`  |
 | Grok                | `T3CODE_GROK_PROBE_TIMEOUT_MS`         |
 | Kiro                | `T3CODE_KIRO_PROBE_TIMEOUT_MS`         |
+| Devin               | `T3CODE_DEVIN_PROBE_TIMEOUT_MS`        |
 | fx                  | `T3CODE_FX_PROBE_TIMEOUT_MS`           |
 | Pi                  | `T3CODE_PI_PROBE_TIMEOUT_MS`           |
 | Muse Code           | `T3CODE_MUSE_PROBE_TIMEOUT_MS`         |

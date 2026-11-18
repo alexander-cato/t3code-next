@@ -40,6 +40,10 @@ export const PROVIDER_CHIP_ICONS: Readonly<
     source: require("../../assets/context-chip-icons/provider-cursor.png"),
     tintsIcon: true,
   },
+  devin: {
+    source: require("../../assets/context-chip-icons/provider-devin.png"),
+    tintsIcon: true,
+  },
   fx: {
     source: require("../../assets/context-chip-icons/provider-fx.png"),
     tintsIcon: true,
