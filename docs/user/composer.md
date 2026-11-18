@@ -283,6 +283,34 @@ provider. On mobile, both are also available before starting a thread on
 The slash menu also includes skills unless you turn off **Settings → Chat →
 Show skills in slash menu**, under Advanced. Only skills enabled for the provider are listed.
 
+### Manage skills across tools
+
+**Settings → Skills** on web and desktop manages the skill catalog on the selected
+environment: `~/.agents/skills/skills`, one folder with a `SKILL.md` per skill. Turning a
+tool on links the skill into that tool's own skills folder, and turning it off removes the
+link. This covers T3 Code's providers, Devin when you add it from the ACP Registry, and other
+installed tools such as Gemini CLI, Copilot, Goose, Junie, Warp, and Windsurf.
+
+- **Install** takes a git repository or a GitHub folder link and copies the skills you pick
+  into the catalog. **Check for updates** compares each installed skill with its source;
+  updating replaces local edits.
+- **Scenarios** are saved sets of links. Switching relinks every tool to match, and while a
+  scenario is active, toggles also change it.
+- A skill a tool keeps in its own folder stays as it is. Copy it into the catalog to share it.
+  Deleting a skill removes the catalog copy and its links, never a tool's own copy.
+- If you used skills-manager.app, **Import** brings over its sources and scenarios once and
+  keeps your links. Quit skills-manager.app afterwards so the two don't change the same links.
+- When the catalog is a git repository, **Back up to git** commits and pushes it shortly after
+  each change. If another machine pushed first, its changes are pulled in before pushing. Import
+  turns this on when the catalog already has a remote. Commits use the repository's git settings,
+  including commit signing.
+
+The server also checks sources for updates and backs up edits made outside T3 Code every 12
+hours while it runs.
+
+Sources and scenarios are saved in the catalog's `.t3-skills.json`. Skills inside a project,
+such as `.claude/skills`, are not managed here.
+
 After you add or change skills, plugins, or MCP servers, use **Restart agent
 session** in the command palette on web and desktop. The conversation continues,
 and your next message starts the agent again with the new setup.
