@@ -172,9 +172,15 @@ export function createProjectEnvironmentAtoms<R, E>(
               allowMissing: true,
             })
           : null;
+        // Shortcut IDs are environment-wide, including scripts created concurrently on other clients.
+        const random = yield* SecureRandom.SecureRandom;
+        const idPrefix = Array.from(yield* random.randomBytes(10), (byte) =>
+          byte.toString(16).padStart(2, "0"),
+        ).join("");
         const scripts = detectProjectScripts(
           files,
           manifest && !manifest.truncated ? manifest.contents : "",
+          idPrefix,
         );
         if (!scripts.length) return false;
         const config = yield* request(WS_METHODS.serverGetConfig, {});

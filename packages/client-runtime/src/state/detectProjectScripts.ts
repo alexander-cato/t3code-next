@@ -9,7 +9,11 @@ const packageManifest = Schema.fromJsonString(
   }),
 );
 
-export function detectProjectScripts(files: ReadonlySet<string>, manifest: string) {
+export function detectProjectScripts(
+  files: ReadonlySet<string>,
+  manifest: string,
+  idPrefix: string,
+) {
   const commands = new Map<string, ProjectScript["icon"]>();
   const pkg = Option.getOrUndefined(Schema.decodeOption(packageManifest)(manifest));
   if (pkg?.scripts) {
@@ -45,8 +49,8 @@ export function detectProjectScripts(files: ReadonlySet<string>, manifest: strin
       commands.set(test, "test");
     }
   }
-  return Array.from(commands, ([command, icon]): ProjectScript => ({
-    id: command.replace(/[^a-z0-9]+/g, "-").replace(/-$/, ""),
+  return Array.from(commands, ([command, icon], index): ProjectScript => ({
+    id: `${idPrefix}-${index}`,
     name: command,
     command,
     icon,
