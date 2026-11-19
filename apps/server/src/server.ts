@@ -102,6 +102,7 @@ import * as VirtualMachineService from "./vm/VirtualMachineService.ts";
 import * as VirtualMachineViewerProxy from "./vm/VirtualMachineViewerProxy.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
+import * as PreviewTunnel from "./preview/PreviewTunnel.ts";
 import * as ServerBrowser from "./preview/ServerBrowser.ts";
 import * as PreviewAgentActivity from "./preview/PreviewAgentActivity.ts";
 import * as DesktopBrowserChannel from "./preview/DesktopBrowserChannel.ts";
@@ -457,6 +458,7 @@ const layerThreadIssueService = ThreadIssueService.layer;
 
 const layerGitManager = GitManager.layer.pipe(
   Layer.provide(Layer.merge(ProjectionStoreV2.layer, ProjectStore.layer)),
+  Layer.provide(layerPullRequestService.pipe(Layer.provide(RuntimeLayer.layerProjectService))),
   Layer.provideMerge(RuntimeLayer.layerProjectSetupScriptRunner),
   Layer.provideMerge(WorktreeSetupTracker.layer),
   Layer.provideMerge(GitVcsDriver.layer),
@@ -534,6 +536,7 @@ const layerTerminal = TerminalManager.layer(
 );
 
 const layerPreview = Layer.empty.pipe(
+  Layer.provideMerge(PreviewTunnel.layer),
   Layer.provideMerge(PreviewManager.layer),
   Layer.provideMerge(layerPortScanner),
 );
@@ -864,6 +867,7 @@ const layerMakeRoutes = Layer.mergeAll(
     DeviceHubProxy.layer,
     VirtualMachineViewerProxy.layer,
     ServerBrowserStream.routeLayer,
+    PreviewTunnel.routeLayer,
     ServerHttp.layerStaticAndDevRoute,
     Ws.layer,
     speechStreamRouteLayer,
@@ -871,6 +875,7 @@ const layerMakeRoutes = Layer.mergeAll(
   McpHttpServer.layer.pipe(
     Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
     Layer.provide(McpOAuth.layerMcpClientAuthenticator),
+    Layer.provide(ProjectionStoreV2.layer),
   ),
   // Follows delegated tasks running in linked environments, including after a restart.
   Layer.effectDiscard(

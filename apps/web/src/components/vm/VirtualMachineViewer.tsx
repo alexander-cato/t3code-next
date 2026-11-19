@@ -1,4 +1,5 @@
 import { Monitor } from "lucide-react";
+import { T, useGT } from "gt-react";
 import { type ReactNode, useEffect, useEffectEvent, useRef, useState } from "react";
 import { Button } from "~/components/ui/button";
 import { Spinner } from "~/components/ui/spinner";
@@ -27,6 +28,7 @@ export function VirtualMachineViewer(props: {
   /** Drawn beside the desktop in every connection state, as device views draw their rail. */
   readonly renderControls?: (controls: VirtualMachineViewerControls) => ReactNode;
 }) {
+  const gt = useGT();
   const frame = useRef<HTMLIFrameElement>(null);
   const host = useRef<HTMLDivElement>(null);
   const recovery = useRef<HTMLDivElement>(null);
@@ -207,7 +209,7 @@ export function VirtualMachineViewer(props: {
       <iframe
         ref={frame}
         key={`${props.name}:${frameUrl}`}
-        title={`${props.name} macOS desktop`}
+        title={gt("{name} macOS desktop", { name: props.name })}
         inert={!streaming}
         tabIndex={streaming ? 0 : -1}
         src={frameUrl}
@@ -228,26 +230,26 @@ export function VirtualMachineViewer(props: {
         >
           <VirtualMachineStatusView
             name={props.name}
-            description="macOS virtual machine"
+            description={gt("macOS virtual machine")}
             error={needsRecovery}
             message={
               needsRecovery
                 ? requesting
-                  ? "Still waiting for the connection attempt. You can close this view."
-                  : "The desktop has not connected yet. Try reconnecting or close this view."
+                  ? gt("Still waiting for the connection attempt. You can close this view.")
+                  : gt("The desktop has not connected yet. Try reconnecting or close this view.")
                 : status === "reconnecting"
-                  ? "Reconnecting to desktop…"
-                  : "Connecting to desktop and preparing input…"
+                  ? gt("Reconnecting to desktop…")
+                  : gt("Connecting to desktop and preparing input…")
             }
           >
             {needsRecovery && (
               <div className="flex flex-wrap justify-center gap-2">
                 <Button variant="outline" size="sm" onClick={props.onClose}>
-                  Close view
+                  <T>Close view</T>
                 </Button>
                 <Button size="sm" onClick={retry} disabled={requesting} aria-busy={requesting}>
                   {requesting && <Spinner size="xs" aria-hidden="true" />}
-                  {requesting ? "Reconnecting…" : "Retry connection"}
+                  {requesting ? gt("Reconnecting…") : gt("Retry connection")}
                 </Button>
               </div>
             )}
