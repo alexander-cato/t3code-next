@@ -1,4 +1,6 @@
 import * as Dialog from "../../components/ui/Dialog";
+import { isScratchProject } from "@t3tools/client-runtime/state/projects";
+import { projectEnvironment } from "../../state/projects";
 import { useThreadDevicesMenu } from "../devices/useThreadDevicesMenu";
 import { errorDisplayMessage } from "@t3tools/client-runtime/errors";
 import { useRememberThreadProject } from "./useRememberThreadProject";
@@ -26,6 +28,8 @@ import {
 import { useGT, useMessages } from "gt-react-native";
 import * as Option from "effect/Option";
 import {
+  AuthFilesystemReadScope,
+  AuthSettingsWriteScope,
   AuthOrchestrationOperateScope,
   AuthTerminalOperateScope,
   AuthTerminalReadScope,
@@ -821,6 +825,26 @@ function ThreadRouteContent(
       terminalId: targetTerminalId,
     });
   };
+  const generateScripts = useAtomCommand(projectEnvironment.generateScripts, {
+    reportFailure: false,
+  });
+  const canReadScripts = useEnvironmentScope(environmentId, AuthFilesystemReadScope);
+  const canSaveScripts = useEnvironmentScope(environmentId, AuthSettingsWriteScope);
+  async function generateProjectScripts() {
+    if (!environmentId || !selectedThreadProject) return;
+    const result = await generateScripts({
+      environmentId,
+      input: { projectId: selectedThreadProject.id },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      Dialog.alert(
+        gt("Could not create project scripts"),
+        errorDisplayMessage(squashAtomCommandFailure(result), m) ?? gt("Try again."),
+      );
+    } else if (result._tag === "Success" && !result.value) {
+      Dialog.alert(gt("No supported project commands found"));
+    }
+  }
   const devicesMenu = useThreadDevicesMenu(environmentId, selectedThread?.id ?? null);
   const threadGitControlProps = {
     environmentId: environmentIdRaw ?? "",
@@ -848,6 +872,17 @@ function ThreadRouteContent(
     onOpenTerminal: handleOpenTerminal,
     onOpenNewTerminal: handleOpenNewTerminal,
     devicesMenu,
+    onGenerateProjectScripts:
+      canReadScripts &&
+      canSaveScripts &&
+      selectedThreadProject &&
+      routeEnvironmentRuntime?.serverConfig &&
+      !isScratchProject(
+        selectedThreadProject,
+        routeEnvironmentRuntime.serverConfig.scratchWorkspaceRoot,
+      )
+        ? generateProjectScripts
+        : undefined,
     onRunProjectScript: handleRunProjectScript,
     onPull: gitActions.onPullSelectedThreadBranch,
     onRunAction: gitActions.onRunSelectedThreadGitAction,

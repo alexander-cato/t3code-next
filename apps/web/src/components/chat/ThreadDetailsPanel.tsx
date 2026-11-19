@@ -13,6 +13,7 @@ import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import type { ComposerThreadTarget, DraftId } from "../../composerDraftStore";
 import { useT3ProjectFileScripts } from "../../hooks/useT3ProjectFileScripts";
 import { type EnvMode, type EnvironmentOption } from "../BranchToolbar.logic";
+import { GenerateProjectScriptsButton } from "../GenerateProjectScriptsButton";
 import { BranchToolbar } from "../BranchToolbar";
 import BaseGitActionsControl from "../GitActionsControl";
 import ProjectScriptsControl, {
@@ -216,17 +217,28 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                     ) : null}
 
                     {show.scripts && props.activeProjectScripts ? (
-                      <ProjectScriptsControl
-                        environmentId={props.environmentId}
-                        displayMode="panel"
-                        scripts={props.activeProjectScripts}
-                        fileScripts={fileScripts}
-                        preferredScriptId={props.preferredScriptId}
-                        onRunScript={props.onRunProjectScript}
-                        onAddScript={props.onAddProjectScript}
-                        onUpdateScript={props.onUpdateProjectScript}
-                        onDeleteScript={props.onDeleteProjectScript}
-                      />
+                      <>
+                        {props.activeProjectScripts.length === 0 &&
+                          project &&
+                          serverConfig &&
+                          !isScratchProject(project, serverConfig.scratchWorkspaceRoot) && (
+                            <GenerateProjectScriptsButton
+                              environmentId={props.environmentId}
+                              projectId={props.projectId}
+                            />
+                          )}
+                        <ProjectScriptsControl
+                          environmentId={props.environmentId}
+                          displayMode="panel"
+                          scripts={props.activeProjectScripts}
+                          fileScripts={fileScripts}
+                          preferredScriptId={props.preferredScriptId}
+                          onRunScript={props.onRunProjectScript}
+                          onAddScript={props.onAddProjectScript}
+                          onUpdateScript={props.onUpdateProjectScript}
+                          onDeleteScript={props.onDeleteProjectScript}
+                        />
+                      </>
                     ) : null}
                   </div>
                 </ThreadDetailsSection>
