@@ -123,6 +123,7 @@ export type ThreadGitControlsProps = ThreadGitMenuProps & {
   readonly terminalSessions: ReadonlyArray<TerminalMenuSession>;
   readonly onOpenTerminal: (terminalId?: string | null) => void;
   readonly onOpenNewTerminal: () => void;
+  readonly onGenerateProjectScripts?: (() => void) | undefined;
   readonly onRunProjectScript: (script: ProjectScript) => Promise<void>;
 };
 
@@ -312,12 +313,12 @@ export function threadTerminalMenu(
           }))
         : [
             {
-              id: "script-none",
-              title: resolve(msg("No project scripts")),
+              id: "script-generate",
+              title: resolve(msg("Auto-create scripts")),
               icon: "play",
               subtitle: resolve(msg("This project has no saved scripts yet")),
-              disabled: true,
-              onPress: () => {},
+              disabled: !props.onGenerateProjectScripts,
+              onPress: () => props.onGenerateProjectScripts?.(),
             },
           ]),
       ...props.terminalSessions.map((session) => ({

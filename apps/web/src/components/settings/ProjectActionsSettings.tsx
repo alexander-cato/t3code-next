@@ -21,6 +21,7 @@ import {
   type NewProjectScriptInput,
   type ProjectScriptEditorRequest,
 } from "../projectScriptEditor";
+import { GenerateProjectScriptsButton } from "../GenerateProjectScriptsButton";
 import { Button } from "../ui/button";
 import {
   Menu,
@@ -127,6 +128,12 @@ export function ProjectActionsSettings() {
         onResetOverride={() => void persist(() => null)}
         control={
           <div className="flex flex-wrap items-center gap-1.5">
+            {scripts.length === 0 && targets.length === 1 && representativeMember && (
+              <GenerateProjectScriptsButton
+                environmentId={representativeMember.environmentId}
+                projectId={representativeMember.id}
+              />
+            )}
             {importableScripts.length > 0 ? (
               <Menu>
                 <MenuTrigger

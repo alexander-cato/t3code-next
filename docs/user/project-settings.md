@@ -185,6 +185,11 @@ on each selected environment, and reset returns to the environment's shared list
 `t3.json` actions can be imported there. When a project has several checkouts on one environment,
 choose one in the scope line at the top to see or change only that checkout's settings.
 
+When a checkout has no actions, choose **Auto-create scripts** in its project settings or thread
+details. On mobile, open the thread’s Terminal menu. T3 Code adds common scripts declared in
+`package.json` and build and test commands for Cargo, Go, and Swift packages. You can edit or
+run the saved actions afterward.
+
 Settings a repository can also declare in `t3.json`, such as the workspace for new threads,
 resolve in one order: a project override, then the environment setting, then `t3.json`, then the
 built-in default. Leave a setting on **Inherit** to let the next tier decide.

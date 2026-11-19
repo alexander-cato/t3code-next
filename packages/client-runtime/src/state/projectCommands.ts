@@ -33,6 +33,9 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { createFileMetadataAtoms } from "./fileMetadata.ts";
 import { resolveWorkspaceFilePath } from "@t3tools/shared/path";
 
+import { detectProjectScripts } from "./detectProjectScripts.ts";
+import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
+
 export type {
   CreateProjectInput,
   DeleteProjectInput,
@@ -143,6 +146,53 @@ export function createProjectEnvironmentAtoms<R, E>(
               ),
             ),
         ),
+    }),
+    generateScripts: createEnvironmentCommand(runtime, {
+      label: "environment-data:projects:generate-scripts",
+      scheduler: projectScheduler,
+      concurrency: projectConcurrency,
+      execute: Effect.fn("Project.generateScripts")(function* (
+        input: { projectId: ProjectId },
+        registry: AtomRegistry.AtomRegistry,
+        environmentId: EnvironmentId,
+      ) {
+        const project = registry.get(
+          options.projectAtom({ environmentId, projectId: input.projectId }),
+        );
+        if (!project) return false;
+        const cwd = project.workspaceRoot;
+        const listing = yield* request(WS_METHODS.projectsListEntries, { cwd, directoryPath: "" });
+        const files = new Set(
+          listing.entries.filter((entry) => entry.kind === "file").map((entry) => entry.path),
+        );
+        const manifest = files.has("package.json")
+          ? yield* request(WS_METHODS.projectsReadFile, {
+              cwd,
+              relativePath: "package.json",
+              allowMissing: true,
+            })
+          : null;
+        const scripts = detectProjectScripts(
+          files,
+          manifest && !manifest.truncated ? manifest.contents : "",
+        );
+        if (!scripts.length) return false;
+        const config = yield* request(WS_METHODS.serverGetConfig, {});
+        if (resolveProjectScripts(config.settings, project).length > 0) return true;
+        yield* requestGuarded(WS_METHODS.serverUpdateSettings, {
+          patch: config.environment.capabilities.projectSettingsOverrides
+            ? {
+                projectSettingsOverrides: {
+                  [project.id]: {
+                    ...config.settings.projectSettingsOverrides[project.id],
+                    defaultProjectScripts: scripts,
+                  },
+                },
+              }
+            : { projectScriptOverrides: { [project.id]: scripts } },
+        });
+        return true;
+      }),
     }),
     searchEntries: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:projects:search-entries",
