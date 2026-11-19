@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useEffectEvent, useState } from "react";
+import { T, useGT, Var } from "gt-react";
 
 import {
   AlertDialog,
@@ -59,7 +60,7 @@ function LumeSetupGuide(props: { readonly reason: string }) {
         rel="noreferrer"
         className="underline underline-offset-4"
       >
-        Setup guide
+        <T>Setup guide</T>
       </a>
     </p>
   );
@@ -67,6 +68,7 @@ function LumeSetupGuide(props: { readonly reason: string }) {
 
 /** macOS VMs as a platform in device setup, beside iOS and Android. */
 export function VirtualMachineSetup({ environmentId }: { readonly environmentId: EnvironmentId }) {
+  const gt = useGT();
   const supported = useVirtualMachinesSupported(environmentId);
   const query = useEnvironmentQuery(supported ? vm.state({ environmentId, input: {} }) : null);
   const canConfigure = useAtomValue(vm.configure.permissionAtom(environmentId));
@@ -110,7 +112,9 @@ export function VirtualMachineSetup({ environmentId }: { readonly environmentId:
   const ready = state.enabled && state.available;
   return (
     <section className="space-y-3 text-sm">
-      <h3 className="font-medium">Check macOS VM support</h3>
+      <h3 className="font-medium">
+        <T>Check macOS VM support</T>
+      </h3>
       <div className="flex items-start gap-2 rounded-md border border-border/60 px-3 py-2">
         {checking ? (
           <Spinner size="sm" />
@@ -120,21 +124,27 @@ export function VirtualMachineSetup({ environmentId }: { readonly environmentId:
           <CircleAlert className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
         )}
         <div className="min-w-0 flex-1">
-          <p className="font-medium">macOS virtual machines</p>
+          <p className="font-medium">
+            <T>macOS virtual machines</T>
+          </p>
           <p className="text-xs text-muted-foreground">
             {checking
-              ? "Checking Lume and Cua…"
+              ? gt("Checking Lume and Cua…")
               : ready
-                ? "Lume and Cua are available. Each VM is a separate Mac that does not share host folders or your clipboard."
+                ? gt(
+                    "Lume and Cua are available. Each VM is a separate Mac that does not share host folders or your clipboard.",
+                  )
                 : state.enabled
-                  ? "macOS VM support needs attention."
-                  : "Run separate Macs through Lume and Cua. The first image download is about 24 GB and needs at least 60 GB free disk space."}
+                  ? gt("macOS VM support needs attention.")
+                  : gt(
+                      "Run separate Macs through Lume and Cua. The first image download is about 24 GB and needs at least 60 GB free disk space.",
+                    )}
           </p>
         </div>
         <Switch
           checked={state.enabled}
           disabled={!canConfigure || pending || creating}
-          aria-label="Use macOS virtual machines"
+          aria-label={gt("Use macOS virtual machines")}
           onCheckedChange={(enabled) => {
             setPending(true);
             setError(null);
@@ -154,7 +164,7 @@ export function VirtualMachineSetup({ environmentId }: { readonly environmentId:
       )}
       {!checking && (failure || (state.enabled && !state.available)) && (
         <Button variant="outline" size="sm" onClick={() => void discover()}>
-          Retry VM discovery
+          <T>Retry VM discovery</T>
         </Button>
       )}
     </section>
@@ -166,6 +176,7 @@ export function VirtualMachineDeviceSection(props: {
   readonly threadRef: ScopedThreadRef;
   readonly discoveryError?: string | null;
 }) {
+  const gt = useGT();
   const { threadRef } = props;
   const { environmentId } = threadRef;
   const supported = useVirtualMachinesSupported(environmentId);
@@ -191,10 +202,10 @@ export function VirtualMachineDeviceSection(props: {
   const nameError =
     name.length > 0 && !isValidName(name)
       ? /^[a-zA-Z0-9]/.test(name)
-        ? "Use only letters, numbers, hyphens, and underscores."
-        : "Start the name with a letter or number."
+        ? gt("Use only letters, numbers, hyphens, and underscores.")
+        : gt("Start the name with a letter or number.")
       : state.machines.some((machine) => machine.name === name)
-        ? "A virtual machine with this name already exists. Choose a different name."
+        ? gt("A virtual machine with this name already exists. Choose a different name.")
         : null;
   const creationRunning = state.operations.some((entry) => entry.status === "creating");
   const run = async <A, E>(label: string, command: () => Promise<AtomCommandResult<A, E>>) => {
@@ -246,7 +257,9 @@ export function VirtualMachineDeviceSection(props: {
     <section className="w-full space-y-3 text-left">
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <Monitor className="size-4 shrink-0" />
-        <h3 className="min-w-0 flex-1 font-medium">macOS virtual machines</h3>
+        <h3 className="min-w-0 flex-1 font-medium">
+          <T>macOS virtual machines</T>
+        </h3>
         {state.enabled && (
           <Button
             variant="outline"
@@ -254,7 +267,7 @@ export function VirtualMachineDeviceSection(props: {
             disabled={!canOperate || !state.available || creationRunning}
             onClick={() => setCreating(true)}
           >
-            <Plus /> Create VM
+            <Plus /> <T>Create VM</T>
           </Button>
         )}
       </div>
@@ -266,7 +279,7 @@ export function VirtualMachineDeviceSection(props: {
             <Button
               size="icon-xs"
               variant="ghost"
-              aria-label="Dismiss virtual machine error"
+              aria-label={gt("Dismiss virtual machine error")}
               onClick={() => setError(null)}
             >
               <X />
@@ -281,12 +294,14 @@ export function VirtualMachineDeviceSection(props: {
               <Monitor className="size-4" />
             </span>
             <div className="min-w-0 flex-1 space-y-1">
-              <p className="text-sm text-foreground">Off on this environment</p>
+              <p className="text-sm text-foreground">
+                <T>Off on this environment</T>
+              </p>
               {state.unavailableReason ? (
                 <LumeSetupGuide reason={state.unavailableReason} />
               ) : (
                 <p className="text-xs text-muted-foreground">
-                  Separate Macs for testing apps, run through Lume and Cua.
+                  <T>Separate Macs for testing apps, run through Lume and Cua.</T>
                 </p>
               )}
             </div>
@@ -299,7 +314,7 @@ export function VirtualMachineDeviceSection(props: {
               }
             >
               {busy === "configure" && <Spinner size="xs" />}
-              Turn on
+              <T>Turn on</T>
             </Button>
           </div>
         </DiscoveryList>
@@ -307,7 +322,9 @@ export function VirtualMachineDeviceSection(props: {
         state.unavailableReason && <LumeSetupGuide reason={state.unavailableReason} />
       ) : state.machines.length === 0 && state.operations.length === 0 ? (
         external.length === 0 && (
-          <p className="text-xs text-muted-foreground">No macOS virtual machines yet.</p>
+          <p className="text-xs text-muted-foreground">
+            <T>No macOS virtual machines yet.</T>
+          </p>
         )
       ) : (
         <DiscoveryList>
@@ -334,8 +351,8 @@ export function VirtualMachineDeviceSection(props: {
                   <p className="text-xs text-muted-foreground">
                     {operation.status === "creating"
                       ? preparingDesktop
-                        ? "Preparing desktop and input…"
-                        : "Downloading and preparing macOS…"
+                        ? gt("Preparing desktop and input…")
+                        : gt("Downloading and preparing macOS…")
                       : operation.error}
                   </p>
                   {operation.status === "creating" && (
@@ -343,8 +360,8 @@ export function VirtualMachineDeviceSection(props: {
                       className="flex w-24 gap-1 pt-1"
                       aria-label={
                         preparingDesktop
-                          ? "Step 2 of 2: prepare desktop"
-                          : "Step 1 of 2: download macOS"
+                          ? gt("Step 2 of 2: prepare desktop")
+                          : gt("Step 1 of 2: download macOS")
                       }
                     >
                       <span className="h-1 flex-1 rounded-full bg-foreground/60" />
@@ -370,7 +387,11 @@ export function VirtualMachineDeviceSection(props: {
                         setCreating(true);
                       }}
                     >
-                      {machine ? (preparingDesktop ? "Open" : "Start") : "Retry setup"}
+                      {machine
+                        ? preparingDesktop
+                          ? gt("Open", { $context: "verb, opens a virtual machine" })
+                          : gt("Start", { $context: "verb, starts a virtual machine" })
+                        : gt("Retry setup")}
                     </Button>
                   )}
                 </div>
@@ -378,7 +399,7 @@ export function VirtualMachineDeviceSection(props: {
                   <Button
                     variant="ghost"
                     size="icon-xs"
-                    aria-label={`Dismiss failed creation of ${operation.name}`}
+                    aria-label={gt("Dismiss failed creation of {name}", { name: operation.name })}
                     disabled={!canOperate}
                     onClick={() =>
                       void run(operation.name, () =>
@@ -414,15 +435,24 @@ export function VirtualMachineDeviceSection(props: {
                     <TooltipPopup>{machine.name}</TooltipPopup>
                   </Tooltip>
                   <span className="truncate text-xs text-muted-foreground">
-                    {machine.adopted ? "Lume" : "This environment"} · macOS ·{" "}
-                    {running ? "Running" : "Stopped"}
+                    {machine.adopted
+                      ? running
+                        ? gt("Lume · macOS · Running")
+                        : gt("Lume · macOS · Stopped")
+                      : running
+                        ? gt("This environment · macOS · Running")
+                        : gt("This environment · macOS · Stopped")}
                   </span>
                 </div>
                 <Button
                   variant="outline"
                   size="sm"
                   disabled={!canOperate || busy === machine.name}
-                  aria-label={`${running ? "Open" : "Start"} ${machine.name}`}
+                  aria-label={
+                    running
+                      ? gt("Open {name}", { name: machine.name })
+                      : gt("Start {name}", { name: machine.name })
+                  }
                   onClick={() => openMachine(machine.name)}
                 >
                   {busy === machine.name ? (
@@ -432,7 +462,9 @@ export function VirtualMachineDeviceSection(props: {
                   ) : (
                     <Play />
                   )}
-                  {running ? "Open" : "Start"}
+                  {running
+                    ? gt("Open", { $context: "verb, opens a virtual machine" })
+                    : gt("Start", { $context: "verb, starts a virtual machine" })}
                 </Button>
                 <Menu>
                   <MenuTrigger
@@ -440,7 +472,7 @@ export function VirtualMachineDeviceSection(props: {
                       <Button
                         variant="ghost"
                         size="icon-sm"
-                        aria-label={`Actions for ${machine.name}`}
+                        aria-label={gt("Actions for {name}", { name: machine.name })}
                       />
                     }
                   >
@@ -454,20 +486,22 @@ export function VirtualMachineDeviceSection(props: {
                     >
                       <Power />
                       <div className="flex max-w-60 flex-col gap-0.5 whitespace-normal">
-                        <span>Suspend</span>
+                        <span>
+                          <T context="verb, suspends a virtual machine">Suspend</T>
+                        </span>
                         <span className="text-xs text-muted-foreground">
-                          Releases CPU and memory and disconnects all open views of this VM.
+                          <T>Releases CPU and memory and disconnects all open views of this VM.</T>
                         </span>
                       </div>
                     </MenuItem>
                     <MenuItem disabled={!canOperate} onClick={() => setDeleteName(machine.name)}>
                       {machine.adopted ? (
                         <>
-                          <Unlink /> Remove from T3
+                          <Unlink /> <T>Remove from T3</T>
                         </>
                       ) : (
                         <>
-                          <Trash2 /> Delete VM
+                          <Trash2 /> <T>Delete VM</T>
                         </>
                       )}
                     </MenuItem>
@@ -481,7 +515,7 @@ export function VirtualMachineDeviceSection(props: {
       {state.enabled && state.available && external.length > 0 && (
         <div className="space-y-2">
           <p className="text-xs text-muted-foreground">
-            Other Lume VMs on this Mac. Opening one runs the original VM in T3.
+            <T>Other Lume VMs on this Mac. Opening one runs the original VM in T3.</T>
           </p>
           <DiscoveryList>
             {external.map((machine) => {
@@ -497,19 +531,23 @@ export function VirtualMachineDeviceSection(props: {
                     </span>
                     <span className="truncate text-xs text-muted-foreground">
                       {openable
-                        ? `Lume · macOS · ${machine.status === "stopped" ? "Stopped" : "Suspended"}`
-                        : "Lume · macOS · Running outside T3. Shut it down in Lume to open it here."}
+                        ? machine.status === "stopped"
+                          ? gt("Lume · macOS · Stopped")
+                          : gt("Lume · macOS · Suspended")
+                        : gt(
+                            "Lume · macOS · Running outside T3. Shut it down in Lume to open it here.",
+                          )}
                     </span>
                   </div>
                   <Button
                     variant="outline"
                     size="sm"
                     disabled={!canOperate || !openable || busy !== null}
-                    aria-label={`Open ${machine.name} in T3`}
+                    aria-label={gt("Open {name} in T3", { name: machine.name })}
                     onClick={() => setAdoptName(machine.name)}
                   >
                     {busy === machine.name ? <Spinner size="xs" /> : <ArrowUpRight />}
-                    Open
+                    <T context="verb, opens a virtual machine">Open</T>
                   </Button>
                 </div>
               );
@@ -525,22 +563,30 @@ export function VirtualMachineDeviceSection(props: {
       >
         <AlertDialogPopup>
           <AlertDialogHeader>
-            <AlertDialogTitle>Open {adoptName} in T3?</AlertDialogTitle>
+            <AlertDialogTitle>
+              <T>
+                Open <Var>{adoptName}</Var> in T3?
+              </T>
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              T3 starts this VM itself, so anything that changes inside it stays in this VM. Its
-              desktop appears only if Cua's guest service is installed in it. Remove it from T3
-              later to hand it back to Lume; T3 never deletes it.
+              <T>
+                T3 starts this VM itself, so anything that changes inside it stays in this VM. Its
+                desktop appears only if Cua's guest service is installed in it. Remove it from T3
+                later to hand it back to Lume; T3 never deletes it.
+              </T>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <AlertDialogClose render={<Button variant="outline" />}>
+              <T>Cancel</T>
+            </AlertDialogClose>
             <Button
               disabled={busy !== null}
               onClick={() => {
                 if (adoptName) void adoptMachine(adoptName);
               }}
             >
-              Open in T3
+              <T>Open in T3</T>
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>
@@ -554,12 +600,14 @@ export function VirtualMachineDeviceSection(props: {
             }}
           >
             <WizardHeader
-              title="Create a virtual machine"
-              description="A separate Mac for testing apps and agent control."
+              title={gt("Create a virtual machine")}
+              description={gt("A separate Mac for testing apps and agent control.")}
             />
             <WizardPanel>
               <div className="space-y-3">
-                <Label htmlFor="vm-name">Virtual machine name</Label>
+                <Label htmlFor="vm-name">
+                  <T>Virtual machine name</T>
+                </Label>
                 <Input
                   id="vm-name"
                   value={name}
@@ -572,8 +620,10 @@ export function VirtualMachineDeviceSection(props: {
                   aria-describedby={nameError ? "vm-name-help vm-name-error" : "vm-name-help"}
                 />
                 <p id="vm-name-help" className="text-xs text-muted-foreground">
-                  Start with a letter or number. Use up to 64 letters, numbers, hyphens, or
-                  underscores.
+                  <T>
+                    Start with a letter or number. Use up to 64 letters, numbers, hyphens, or
+                    underscores.
+                  </T>
                 </p>
                 {nameError && (
                   <p id="vm-name-error" role="alert" className="text-xs text-destructive">
@@ -581,11 +631,15 @@ export function VirtualMachineDeviceSection(props: {
                   </p>
                 )}
                 <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3 text-xs">
-                  <p className="font-medium">macOS Tahoe · 4 CPUs · 8 GB memory</p>
-                  <p className="text-muted-foreground">
-                    First download: about 24 GB. Keep at least 60 GB of disk space free.
+                  <p className="font-medium">
+                    <T>macOS Tahoe · 4 CPUs · 8 GB memory</T>
                   </p>
-                  <p className="text-muted-foreground">Up to two macOS VMs can run at once.</p>
+                  <p className="text-muted-foreground">
+                    <T>First download: about 24 GB. Keep at least 60 GB of disk space free.</T>
+                  </p>
+                  <p className="text-muted-foreground">
+                    <T>Up to two macOS VMs can run at once.</T>
+                  </p>
                 </div>
                 {error && (
                   <p role="alert" className="text-xs text-destructive">
@@ -596,14 +650,14 @@ export function VirtualMachineDeviceSection(props: {
             </WizardPanel>
             <WizardFooter>
               <Button type="button" variant="outline" onClick={() => setCreating(false)}>
-                Cancel
+                <T>Cancel</T>
               </Button>
               <Button
                 type="submit"
                 disabled={busy !== null || !canOperate || !isValidName(name) || nameError !== null}
               >
                 {busy === name && <Spinner size="xs" />}
-                Create VM
+                <T>Create VM</T>
               </Button>
             </WizardFooter>
           </form>
@@ -618,16 +672,31 @@ export function VirtualMachineDeviceSection(props: {
         <AlertDialogPopup>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {deleteAdopted ? `Remove ${deleteName} from T3?` : `Delete ${deleteName}?`}
+              {deleteAdopted ? (
+                <T>
+                  Remove <Var>{deleteName}</Var> from T3?
+                </T>
+              ) : (
+                <T>
+                  Delete <Var>{deleteName}</Var>?
+                </T>
+              )}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {deleteAdopted
-                ? "T3 stops managing this VM and suspends it if it's running. The VM and its files stay in Lume."
-                : "This permanently removes the virtual machine and all files inside it."}
+              {deleteAdopted ? (
+                <T>
+                  T3 stops managing this VM and suspends it if it's running. The VM and its files
+                  stay in Lume.
+                </T>
+              ) : (
+                <T>This permanently removes the virtual machine and all files inside it.</T>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+            <AlertDialogClose render={<Button variant="outline" />}>
+              <T>Cancel</T>
+            </AlertDialogClose>
             <Button
               variant={deleteAdopted ? "default" : "destructive"}
               disabled={busy !== null}
@@ -635,7 +704,7 @@ export function VirtualMachineDeviceSection(props: {
                 if (deleteName) void deleteMachine(deleteName);
               }}
             >
-              {deleteAdopted ? "Remove from T3" : "Delete VM"}
+              {deleteAdopted ? <T>Remove from T3</T> : <T>Delete VM</T>}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

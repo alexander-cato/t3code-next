@@ -1,6 +1,7 @@
 import { virtualMachineViewerUrl } from "@t3tools/client-runtime/state/virtual-machines";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import { msg, useGT } from "gt-react-native";
 import * as Option from "effect/Option";
 import { useEffect, useEffectEvent, useState } from "react";
 import { AppState, View } from "react-native";
@@ -8,6 +9,7 @@ import { AppState, View } from "react-native";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { AppText } from "../../components/ui/AppText";
 import { Button } from "../../components/ui/Button";
+import { m } from "../../i18n/messages";
 import { usePreparedConnection } from "../../state/session";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { virtualMachineEnvironment as vm } from "../../state/virtualMachines";
@@ -21,6 +23,7 @@ export function VirtualMachinePreview(props: {
   readonly name: string;
 }) {
   const { environmentId, threadId, name } = props;
+  const gt = useGT();
   const { themeVariables } = useAppearancePreferences();
   const prepared = Option.getOrNull(usePreparedConnection(environmentId));
   const open = useAtomCommand(vm.open, { reportFailure: false });
@@ -68,7 +71,7 @@ export function VirtualMachinePreview(props: {
     if (!viewer) return;
     const expire = () => {
       setViewer(null);
-      setError("The VM view expired. Reconnect to continue.");
+      setError(m(msg("The VM view expired. Reconnect to continue.")));
     };
     const timeout = setTimeout(expire, Math.max(0, viewer.expiresAt - Date.now()));
     // Native timers can pause while the app is in the background.
@@ -101,7 +104,7 @@ export function VirtualMachinePreview(props: {
             {error}
           </AppText>
           <Button
-            label="Reconnect"
+            label={gt("Reconnect")}
             tone="secondary"
             onPress={() => setAttempt((value) => value + 1)}
           />
@@ -109,7 +112,9 @@ export function VirtualMachinePreview(props: {
       ) : (
         <>
           <AppActivityIndicator color={themeVariables["--color-icon"]} />
-          <AppText className="text-sm text-foreground-muted">Connecting to {name}…</AppText>
+          <AppText className="text-sm text-foreground-muted">
+            {gt("Connecting to {name}…", { name })}
+          </AppText>
         </>
       )}
     </View>

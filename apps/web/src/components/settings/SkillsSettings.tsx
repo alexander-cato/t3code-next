@@ -51,7 +51,7 @@ import { Switch } from "../ui/switch";
 import { Toggle } from "../ui/toggle";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
-import { searchableSetting } from "./settingsSearch";
+import { useSearchableSetting } from "./settingsSearch";
 
 type Run = (mutation: SkillLibraryMutation) => Promise<boolean>;
 type Confirmation = {
@@ -77,6 +77,7 @@ function SkillLibraryPanel({ environmentId }: { readonly environmentId: Environm
   const canManage = useAtomValue(skillLibraryMutate.permissionAtom(environmentId));
   const mutate = useAtomCommand(skillLibraryMutate);
   const gt = useGT();
+  const searchableSetting = useSearchableSetting();
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [installing, setInstalling] = useState(false);
