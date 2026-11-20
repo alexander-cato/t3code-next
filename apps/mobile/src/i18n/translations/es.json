@@ -3412,6 +3412,8 @@
   "7fa92b78ba609ca7": "Se detendrán los hilos en ejecución que comparten este inicio de sesión en {environment}. Se conserva el historial de los hilos.",
   "a656dc69a38a3639": "Cerrar sesión",
   "99bb27b91bab1824": "Cambiar de cuenta",
+  "ef6e7ce086530e33": "Preparar agente",
+  "d2fff7c7faf75c0c": "Preparar {provider}",
   "f2e393e1419f8c99": "Documentación",
   "7418b73b1961e980": "No se pudo abrir la documentación del proveedor.",
   "eedf7b1e0e29cdec": "Cancelar el inicio de sesión en {provider}",

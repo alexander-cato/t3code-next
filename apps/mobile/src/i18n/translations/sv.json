@@ -3418,6 +3418,8 @@
   "7fa92b78ba609ca7": "Pågående trådar som delar den här inloggningen på {environment} stoppas. Trådhistoriken behålls.",
   "a656dc69a38a3639": "Logga ut",
   "99bb27b91bab1824": "Byt konto",
+  "ef6e7ce086530e33": "Förbered agent",
+  "d2fff7c7faf75c0c": "Förbered {provider}",
   "f2e393e1419f8c99": "Dokumentation",
   "7418b73b1961e980": "Kunde inte öppna leverantörens dokumentation.",
   "eedf7b1e0e29cdec": "Avbryt inloggning i {provider}",

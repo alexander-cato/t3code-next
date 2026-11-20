@@ -1312,6 +1312,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
     distribution: "npx" | "uvx",
     packageSpec: string,
     environment: NodeJS.ProcessEnv,
+    repair = false,
   ) {
     const managerName = packageManagerFor(distribution)!;
     const managerPath = resolveExecutable(managerName, platform, environment);
@@ -1321,7 +1322,9 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
         detail: `ACP Registry agent ${agent.id} requires '${managerName}', but it is not available on this environment's PATH.`,
       });
     }
-    const receipt = yield* readPackageReceipt(agent, distribution, packageSpec, managerPath);
+    const receipt = repair
+      ? Option.none()
+      : yield* readPackageReceipt(agent, distribution, packageSpec, managerPath);
     if (Option.isSome(receipt) && distribution === "npx") return receipt.value;
 
     const packageRoot = packageInstallRoot(agent, distribution);
@@ -1357,7 +1360,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       distribution === "npx"
         ? () => discoverNpmGlobalPackage(agent, packageSpec, managerPath, packageEnvironment)
         : () => discoverUvGlobalPackage(agent, packageSpec, managerPath, packageEnvironment);
-    const existing = yield* discover();
+    const existing = repair ? Option.none() : yield* discover();
     if (Option.isSome(existing)) {
       yield* writePackageReceipt(existing.value);
       return existing.value;
@@ -1508,6 +1511,7 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
   const installBinary = Effect.fn("AcpRegistryCatalog.installBinary")(function* (
     agent: AcpRegistryAgent,
     target: typeof AcpRegistryBinaryTarget.Type,
+    repair = false,
   ) {
     if (platformTarget === undefined) {
       return yield* new AcpRegistryError({
@@ -1523,7 +1527,10 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       });
     }
     const { commandSegments, installRoot, executablePath } = paths;
-    if (yield* fileSystem.exists(executablePath).pipe(Effect.orElseSucceed(() => false))) {
+    if (
+      !repair &&
+      (yield* fileSystem.exists(executablePath).pipe(Effect.orElseSucceed(() => false)))
+    ) {
       return yield* assertExecutableInRoot(installRoot, executablePath).pipe(
         Effect.mapError((cause) =>
           isAcpRegistryError(cause)
@@ -1561,7 +1568,10 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
     );
 
     return yield* Effect.gen(function* () {
-      if (yield* fileSystem.exists(executablePath).pipe(Effect.orElseSucceed(() => false))) {
+      if (
+        !repair &&
+        (yield* fileSystem.exists(executablePath).pipe(Effect.orElseSucceed(() => false)))
+      ) {
         return yield* assertExecutableInRoot(installRoot, executablePath);
       }
       const temporaryRoot = yield* fileSystem.makeTempDirectoryScoped({
@@ -1792,13 +1802,19 @@ export const makeAcpRegistryCatalog = Effect.fn("AcpRegistryCatalog.make")(funct
       if (distribution.kind === "binary") {
         // Only explicit command overrides may use PATH copies with different ACP capabilities.
         yield* withInstallPermit(agent.id)(
-          installBinary(agent, distribution.binaryTarget!).pipe(
+          installBinary(agent, distribution.binaryTarget!, input.repair === true).pipe(
             Effect.tap(() => reservePreparedBinary(agent.id)),
           ),
         );
       } else {
         yield* withInstallPermit(agent.id)(
-          ensureGlobalPackage(agent, distribution.kind, distribution.packageName!, hostEnvironment),
+          ensureGlobalPackage(
+            agent,
+            distribution.kind,
+            distribution.packageName!,
+            hostEnvironment,
+            input.repair === true,
+          ),
         );
       }
       return {

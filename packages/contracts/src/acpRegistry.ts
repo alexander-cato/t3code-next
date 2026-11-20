@@ -82,6 +82,8 @@ export type AcpRegistrySearchResult = typeof AcpRegistrySearchResult.Type;
 
 export const AcpRegistryPrepareInput = Schema.Struct({
   agentId: AcpRegistryAgentId,
+  // Replaces an existing managed install instead of reusing it.
+  repair: Schema.optional(Schema.Boolean),
 });
 export type AcpRegistryPrepareInput = typeof AcpRegistryPrepareInput.Type;
 
