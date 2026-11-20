@@ -8194,7 +8194,7 @@
   "e2397769824ca81d": "Simulatoren und Emulatoren, die auf dem Rechner dieser Umgebung installiert sind.",
   "672cd60933977c0f": "Verbindung wird getestet",
   "2e10c5faf3870279": "Keine Verbindung möglich",
-  "e5624bd8af85b53d": "Gerätequellen",
+  "65d3e5f89ff5de26": "Simulatorquellen",
   "344668144ff90eb3": "Verfügbar",
   "4f58bcacf894c5bc": "Nicht verfügbar",
   "bc311f08f44d2e5c": "{source}: {platform} verfügbar",
@@ -8448,6 +8448,8 @@
   "73e76ba75c8d3096": "{environments} konnte nicht aktualisiert werden.",
   "b16605b8957226ea": "Aktualisieren",
   "f8571b5368d6d847": "Versionen prüfen",
+  "fb2ef161e0394181": "iOS-Simulatoren und Android-Emulatoren im Gerätebereich öffnen.",
+  "e9c435c2e249fda2": "Neue Agentensitzungen können die oben aktivierten Geräte öffnen und steuern.",
   "388698edad9faf0e": "Gerätezugriff für Agenten",
   "1cc07e37777f5c12": "Zugriff auf virtuelle Maschinen konnte nicht geändert werden",
   "625a55d0a549fcde": "Führe lokale macOS-VMs in dieser Umgebung über Lume und Cua aus. Agenten steuern sie, wenn sie Geräte verwenden dürfen. Beim Deaktivieren werden VM-Ansichten geschlossen, ohne Festplatten zu löschen oder laufende VMs zu stoppen.",
@@ -8478,16 +8480,16 @@
   "fedb5397301d3392": "Bereich füllen",
   "2fdc83ad8b55eb11": "Responsiv",
   "cf05007f2ba8ad42": "Drehen",
-  "862a3e2e99dfadb6": [
-    "Simulatoren und Emulatoren im Gerätebereich öffnen. Hub:",
+  "1ffd14fde9845fd5": [
+    "Geräte-Hub:",
     " ",
     {
       "t": "DeviceToolVersions",
       "i": 1
     }
   ],
-  "151f86b6dcd56244": [
-    "Neue Agentensitzungen können diese Geräte öffnen und steuern. agent-device:",
+  "fd8ff421e9b437c0": [
+    "agent-device:",
     " ",
     {
       "t": "DeviceToolVersions",
@@ -11718,7 +11720,7 @@
   "345075be6cacc171": "gerät hosts ssh remote mac mini identität schlüssel verbindung eas expo cloud simlock pool gateway lokale simulatoren",
   "a6b742430b05d6cc": "Agenten können Geräte nutzen",
   "1d5d7418a83575c2": "erlauben simulator emulator ios android steuern tools sitzungen",
-  "60f0825756e404dc": "Geräte nutzen",
+  "9dd51dc4ba3cc651": "Simulatoren und Emulatoren",
   "907782e153a139a3": "geräte-hub simulator emulator ios android installieren starten version",
   "ad89031709b521b8": "simulator unterstützung xcode android studio sdk avd laufzeit",
   "98a0d9d96a4b98f1": "Browser-Profile",

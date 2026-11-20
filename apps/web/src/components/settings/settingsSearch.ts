@@ -1104,7 +1104,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "device-sources",
-    title: msg("Device sources"),
+    title: msg("Simulator sources"),
     to: "/settings/devices",
     searchTerms: [
       msg(
@@ -1116,12 +1116,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "agent-device-access",
     title: msg("Agents can use devices"),
     to: "/settings/devices",
-    targetId: "devices",
+    targetId: "device-agents",
     searchTerms: [msg("allow simulator emulator ios android drive tools sessions")],
   },
   {
     id: "device-hub",
-    title: msg("Use devices"),
+    title: msg("Simulators and emulators"),
     to: "/settings/devices",
     targetId: "devices",
     searchTerms: [msg("device hub simulator emulator ios android install start version")],

@@ -22,7 +22,7 @@ Choose **Float device over chat** in the toolbar to keep watching and tapping th
 device in a small window while the right panel shows something else; drag the
 window by its handle, resize it from any edge, and use **Open in right panel**
 to bring it back.
-Turn off **Use devices** in **Settings → Devices** to stop the
+Turn off **Simulators and emulators** in **Settings → Devices** to stop the
 helper processes; simulators and emulators keep running until you power them
 off.
 
@@ -208,8 +208,8 @@ gateway and workers built from Simlock's `main` at
 [6316e10](https://github.com/callstackincubator/simlock/commit/6316e10) or
 later, the first with a lease holder's screen and input.
 
-Turn on **Settings → Labs → Simlock device hosts (alpha)** and **Use devices**
-in Settings → Devices, then choose **Add source → Simlock pool** with an **agent token**
+Turn on **Settings → Labs → Simlock device hosts (alpha)** and **Simulators and
+emulators** in Settings → Devices, then choose **Add source → Simlock pool** with an **agent token**
 (`simlock --gateway token create --role agent`). Give each T3 server its own
 token: Simlock counts every lease made with one token against the same
 requester, and allows one at a time unless the gateway's

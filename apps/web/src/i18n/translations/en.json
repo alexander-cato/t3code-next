@@ -8202,7 +8202,7 @@
   "e2397769824ca81d": "Simulators and emulators installed on this environment's machine.",
   "672cd60933977c0f": "Testing connection",
   "2e10c5faf3870279": "Can't connect",
-  "e5624bd8af85b53d": "Device sources",
+  "65d3e5f89ff5de26": "Simulator sources",
   "344668144ff90eb3": "Available",
   "4f58bcacf894c5bc": "Not available",
   "bc311f08f44d2e5c": "{source}: {platform} available",
@@ -8456,6 +8456,8 @@
   "73e76ba75c8d3096": "Could not update {environments}.",
   "b16605b8957226ea": "Update",
   "f8571b5368d6d847": "Check versions",
+  "fb2ef161e0394181": "Open iOS simulators and Android emulators in the Device panel.",
+  "e9c435c2e249fda2": "New agent sessions can open and drive the devices turned on above.",
   "388698edad9faf0e": "Agent device access",
   "1cc07e37777f5c12": "Could not change virtual machine access",
   "625a55d0a549fcde": "Run local macOS VMs on this environment through Lume and Cua. Agents control them when they can use devices. Turning this off closes VM views without deleting disks or stopping running VMs.",
@@ -8486,16 +8488,16 @@
   "fedb5397301d3392": "Fill panel",
   "2fdc83ad8b55eb11": "Responsive",
   "cf05007f2ba8ad42": "Rotate",
-  "862a3e2e99dfadb6": [
-    "Open simulators and emulators in the Device panel. Hub:",
+  "1ffd14fde9845fd5": [
+    "Device hub:",
     " ",
     {
       "t": "DeviceToolVersions",
       "i": 1
     }
   ],
-  "151f86b6dcd56244": [
-    "New agent sessions can open and drive these devices. agent-device:",
+  "fd8ff421e9b437c0": [
+    "agent-device:",
     " ",
     {
       "t": "DeviceToolVersions",
@@ -11726,7 +11728,7 @@
   "345075be6cacc171": "device hosts ssh remote mac mini identity key connection eas expo cloud simlock pool gateway local simulators",
   "a6b742430b05d6cc": "Agents can use devices",
   "1d5d7418a83575c2": "allow simulator emulator ios android drive tools sessions",
-  "60f0825756e404dc": "Use devices",
+  "9dd51dc4ba3cc651": "Simulators and emulators",
   "907782e153a139a3": "device hub simulator emulator ios android install start version",
   "ad89031709b521b8": "simulator support xcode android studio sdk avd runtime",
   "98a0d9d96a4b98f1": "Browser profiles",
