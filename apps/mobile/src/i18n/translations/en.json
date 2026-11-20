@@ -3450,6 +3450,8 @@
   "7fa92b78ba609ca7": "Running threads sharing this sign-in on {environment} will stop. Thread history is kept.",
   "a656dc69a38a3639": "Sign out",
   "99bb27b91bab1824": "Change account",
+  "ef6e7ce086530e33": "Prepare agent",
+  "d2fff7c7faf75c0c": "Prepare {provider}",
   "f2e393e1419f8c99": "Docs",
   "7418b73b1961e980": "Could not open the provider docs.",
   "eedf7b1e0e29cdec": "Cancel {provider} sign-in",

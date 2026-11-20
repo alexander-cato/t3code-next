@@ -3444,6 +3444,8 @@
   "7fa92b78ba609ca7": "Les fils en cours qui partagent cette connexion sur {environment} s’arrêteront. L’historique des fils est conservé.",
   "a656dc69a38a3639": "Se déconnecter",
   "99bb27b91bab1824": "Changer de compte",
+  "ef6e7ce086530e33": "Préparer l’agent",
+  "d2fff7c7faf75c0c": "Préparer {provider}",
   "f2e393e1419f8c99": "Documentation",
   "7418b73b1961e980": "Impossible d’ouvrir la documentation du fournisseur.",
   "eedf7b1e0e29cdec": "Annuler la connexion à {provider}",

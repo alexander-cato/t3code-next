@@ -3449,6 +3449,8 @@
   "7fa92b78ba609ca7": "Laufende Threads mit dieser Anmeldung auf {environment} werden beendet. Der Thread-Verlauf bleibt erhalten.",
   "a656dc69a38a3639": "Abmelden",
   "99bb27b91bab1824": "Konto wechseln",
+  "ef6e7ce086530e33": "Agent vorbereiten",
+  "d2fff7c7faf75c0c": "{provider} vorbereiten",
   "f2e393e1419f8c99": "Doku",
   "7418b73b1961e980": "Die Anbieter-Dokumentation konnte nicht geöffnet werden.",
   "eedf7b1e0e29cdec": "Anmeldung bei {provider} abbrechen",

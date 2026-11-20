@@ -512,6 +512,10 @@ describe("AcpRegistrySupport", () => {
       expect(npmCommands.match(/^install --global /gmu)).toHaveLength(1);
       expect(npmCommands).toContain("install --global @example/acp@V1.2.3");
 
+      yield* resolver.prepare({ agentId: agent.id, repair: true });
+      const repairedCommands = yield* fileSystem.readFileString(toolchain.logPath);
+      expect(repairedCommands.match(/^install --global /gmu)).toHaveLength(2);
+
       // A missing npm bin link must not select an unrelated command from the user's PATH.
       const userBin = `${cacheDir}/user-bin`;
       yield* fileSystem.makeDirectory(userBin);
@@ -525,7 +529,7 @@ describe("AcpRegistrySupport", () => {
       const repaired = yield* resolver.resolve(settings(), "/workspace", userEnvironment);
       expect(repaired.spawn.command).toBe(toolchain.executablePath);
       const repairCommands = yield* fileSystem.readFileString(toolchain.logPath);
-      expect(repairCommands.match(/^install --global /gmu)).toHaveLength(2);
+      expect(repairCommands.match(/^install --global /gmu)).toHaveLength(3);
 
       yield* fileSystem.remove(toolchain.executablePath);
       const failedRepair = yield* resolver
@@ -790,6 +794,15 @@ describe("AcpRegistrySupport", () => {
         "#!/bin/sh\necho example\n",
       );
       expect(requests).toEqual([registryUrl, archiveUrl]);
+
+      yield* fileSystem.writeFileString(first.spawn.command, "damaged");
+      yield* resolver.prepare({ agentId: agent.id });
+      expect(yield* fileSystem.readFileString(first.spawn.command)).toBe("damaged");
+      yield* resolver.prepare({ agentId: agent.id, repair: true });
+      expect(yield* fileSystem.readFileString(first.spawn.command)).toBe(
+        "#!/bin/sh\necho example\n",
+      );
+      expect(requests).toEqual([registryUrl, archiveUrl, registryUrl, registryUrl, archiveUrl]);
     }).pipe(
       Effect.scoped,
       Effect.provide(
@@ -1666,6 +1679,20 @@ describe("AcpRegistrySupport", () => {
 
       expect(inspection).toMatchObject({ status: "ready", agentId: agent.id });
       expect(requests).toBe(0);
+
+      const importedHome = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-acp-registry-imported-home-",
+      });
+      const importedResolver = yield* AcpRegistrySupport.makeAcpRegistryCatalog({
+        cacheDir: importedHome,
+        toolsDir: `${importedHome}/tools`,
+        registryUrl,
+      });
+      expect(yield* importedResolver.inspect(settings())).toMatchObject({
+        status: "ready",
+        agentId: agent.id,
+      });
+      expect(requests).toBe(1);
     }).pipe(
       Effect.scoped,
       Effect.provide(
