@@ -8154,7 +8154,7 @@
   "e2397769824ca81d": "Simulateurs et émulateurs installés sur la machine de cet environnement.",
   "672cd60933977c0f": "Test de la connexion",
   "2e10c5faf3870279": "Connexion impossible",
-  "e5624bd8af85b53d": "Sources d’appareils",
+  "65d3e5f89ff5de26": "Sources de simulateurs",
   "344668144ff90eb3": "Disponible",
   "4f58bcacf894c5bc": "Non disponible",
   "bc311f08f44d2e5c": "{source} : {platform} disponible",
@@ -8405,6 +8405,8 @@
   "73e76ba75c8d3096": "Impossible de mettre à jour {environments}.",
   "b16605b8957226ea": "Mettre à jour",
   "f8571b5368d6d847": "Vérifier les versions",
+  "fb2ef161e0394181": "Ouvrez les simulateurs iOS et les émulateurs Android dans le panneau Appareil.",
+  "e9c435c2e249fda2": "Les nouvelles sessions d’agent peuvent ouvrir et piloter les appareils activés ci-dessus.",
   "388698edad9faf0e": "Accès des agents aux appareils",
   "1cc07e37777f5c12": "Impossible de modifier l’accès aux machines virtuelles",
   "625a55d0a549fcde": "Exécutez des VM macOS locales dans cet environnement via Lume et Cua. Les agents les contrôlent lorsqu’ils peuvent utiliser des appareils. Désactiver cette option ferme les vues des VM sans supprimer les disques ni arrêter les VM en cours d’exécution.",
@@ -8435,16 +8437,16 @@
   "fedb5397301d3392": "Remplir le panneau",
   "2fdc83ad8b55eb11": "Adaptatif",
   "cf05007f2ba8ad42": "Pivoter",
-  "862a3e2e99dfadb6": [
-    "Ouvrez des simulateurs et des émulateurs dans le panneau Appareils. Hub :",
+  "1ffd14fde9845fd5": [
+    "Hub d’appareils :",
     " ",
     {
       "t": "DeviceToolVersions",
       "i": 1
     }
   ],
-  "151f86b6dcd56244": [
-    "Les nouvelles sessions d’agent peuvent ouvrir et piloter ces appareils. agent-device :",
+  "fd8ff421e9b437c0": [
+    "agent-device :",
     " ",
     {
       "t": "DeviceToolVersions",
@@ -11663,7 +11665,7 @@
   "345075be6cacc171": "appareil hôtes ssh distant mac mini identité clé connexion eas expo cloud simlock pool passerelle simulateurs locaux",
   "a6b742430b05d6cc": "Les agents peuvent utiliser les appareils",
   "1d5d7418a83575c2": "autoriser simulateur émulateur ios android piloter outils sessions",
-  "60f0825756e404dc": "Utiliser les appareils",
+  "9dd51dc4ba3cc651": "Simulateurs et émulateurs",
   "907782e153a139a3": "hub d’appareils simulateur émulateur ios android installer démarrer version",
   "ad89031709b521b8": "prise en charge simulateur xcode android studio sdk avd runtime",
   "98a0d9d96a4b98f1": "Profils du navigateur",

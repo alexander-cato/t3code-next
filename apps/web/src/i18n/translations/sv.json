@@ -8159,7 +8159,7 @@
   "e2397769824ca81d": "Simulatorer och emulatorer installerade på den här miljöns dator.",
   "672cd60933977c0f": "Testar anslutning",
   "2e10c5faf3870279": "Kan inte ansluta",
-  "e5624bd8af85b53d": "Enhetskällor",
+  "65d3e5f89ff5de26": "Simulatorkällor",
   "344668144ff90eb3": "Tillgänglig",
   "4f58bcacf894c5bc": "Inte tillgänglig",
   "bc311f08f44d2e5c": "{source}: {platform} tillgänglig",
@@ -8412,6 +8412,8 @@
   "73e76ba75c8d3096": "Kunde inte uppdatera {environments}.",
   "b16605b8957226ea": "Uppdatera",
   "f8571b5368d6d847": "Kontrollera versioner",
+  "fb2ef161e0394181": "Öppna iOS-simulatorer och Android-emulatorer i enhetspanelen.",
+  "e9c435c2e249fda2": "Nya agentsessioner kan öppna och styra enheterna som är påslagna ovan.",
   "388698edad9faf0e": "Agenters enhetsåtkomst",
   "1cc07e37777f5c12": "Kunde inte ändra åtkomsten till virtuella maskiner",
   "625a55d0a549fcde": "Kör lokala macOS-VM:ar i den här miljön via Lume och Cua. Agenter styr dem när de får använda enheter. Om du stänger av det här stängs VM-vyerna utan att diskar tas bort eller VM:ar som körs stoppas.",
@@ -8442,16 +8444,16 @@
   "fedb5397301d3392": "Fyll panelen",
   "2fdc83ad8b55eb11": "Responsiv",
   "cf05007f2ba8ad42": "Rotera",
-  "862a3e2e99dfadb6": [
-    "Öppna simulatorer och emulatorer i enhetspanelen. Hub:",
+  "1ffd14fde9845fd5": [
+    "Enhetshubb:",
     " ",
     {
       "t": "DeviceToolVersions",
       "i": 1
     }
   ],
-  "151f86b6dcd56244": [
-    "Nya agentsessioner kan öppna och styra de här enheterna. agent-device:",
+  "fd8ff421e9b437c0": [
+    "agent-device:",
     " ",
     {
       "t": "DeviceToolVersions",
@@ -11671,7 +11673,7 @@
   "345075be6cacc171": "enhetsvärdar ssh fjärr mac mini identitet nyckel anslutning eas expo moln simlock pool gateway lokala simulatorer",
   "a6b742430b05d6cc": "Agenter kan använda enheter",
   "1d5d7418a83575c2": "tillåt simulator emulator ios android styr verktyg sessioner",
-  "60f0825756e404dc": "Använd enheter",
+  "9dd51dc4ba3cc651": "Simulatorer och emulatorer",
   "907782e153a139a3": "enhetshubb simulator emulator ios android installera starta version",
   "ad89031709b521b8": "simulatorstöd xcode android studio sdk avd körmiljö",
   "98a0d9d96a4b98f1": "Webbläsarprofiler",

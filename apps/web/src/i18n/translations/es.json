@@ -8153,7 +8153,7 @@
   "e2397769824ca81d": "Simuladores y emuladores instalados en la máquina de este entorno.",
   "672cd60933977c0f": "Probando conexión",
   "2e10c5faf3870279": "No se puede conectar",
-  "e5624bd8af85b53d": "Orígenes de dispositivos",
+  "65d3e5f89ff5de26": "Fuentes de simuladores",
   "344668144ff90eb3": "Disponible",
   "4f58bcacf894c5bc": "No disponible",
   "bc311f08f44d2e5c": "{source}: {platform} disponible",
@@ -8404,6 +8404,8 @@
   "73e76ba75c8d3096": "No se pudo actualizar {environments}.",
   "b16605b8957226ea": "Actualizar",
   "f8571b5368d6d847": "Comprobar versiones",
+  "fb2ef161e0394181": "Abre simuladores de iOS y emuladores de Android en el panel Dispositivo.",
+  "e9c435c2e249fda2": "Las nuevas sesiones de agentes pueden abrir y controlar los dispositivos activados arriba.",
   "388698edad9faf0e": "Acceso de agentes a dispositivos",
   "1cc07e37777f5c12": "No se pudo cambiar el acceso a máquinas virtuales",
   "625a55d0a549fcde": "Ejecuta VM locales de macOS en este entorno mediante Lume y Cua. Los agentes las controlan cuando pueden usar dispositivos. Al desactivarlo se cierran las vistas de VM sin eliminar discos ni detener las VM en ejecución.",
@@ -8434,16 +8436,16 @@
   "fedb5397301d3392": "Llenar panel",
   "2fdc83ad8b55eb11": "Adaptable",
   "cf05007f2ba8ad42": "Girar",
-  "862a3e2e99dfadb6": [
-    "Abre simuladores y emuladores en el panel Dispositivo. Hub:",
+  "1ffd14fde9845fd5": [
+    "Hub de dispositivos:",
     " ",
     {
       "t": "DeviceToolVersions",
       "i": 1
     }
   ],
-  "151f86b6dcd56244": [
-    "Las nuevas sesiones de agente pueden abrir y controlar estos dispositivos. agent-device:",
+  "fd8ff421e9b437c0": [
+    "agent-device:",
     " ",
     {
       "t": "DeviceToolVersions",
@@ -11658,7 +11660,7 @@
   "345075be6cacc171": "hosts de dispositivos ssh remoto mac mini identidad clave conexión eas expo nube simlock grupo gateway simuladores locales",
   "a6b742430b05d6cc": "Los agentes pueden usar dispositivos",
   "1d5d7418a83575c2": "permitir simulador emulador ios android controlar herramientas sesiones",
-  "60f0825756e404dc": "Usar dispositivos",
+  "9dd51dc4ba3cc651": "Simuladores y emuladores",
   "907782e153a139a3": "hub de dispositivos simulador emulador ios android instalar iniciar versión",
   "ad89031709b521b8": "simulador compatibilidad xcode android studio sdk avd runtime",
   "98a0d9d96a4b98f1": "Perfiles del navegador",
