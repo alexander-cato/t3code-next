@@ -1,4 +1,5 @@
 import { Camera, MoreHorizontal, PictureInPicture2, Power, RefreshCw, X } from "lucide-react";
+import { T, useGT } from "gt-react";
 
 import { Button } from "~/components/ui/button";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "~/components/ui/menu";
@@ -14,11 +15,12 @@ export function VirtualMachineControlsRail(props: {
   readonly onClose: () => void;
   readonly onSuspend: () => void;
 }) {
+  const gt = useGT();
   return (
-    <PreviewControlsRail label="Virtual machine controls">
+    <PreviewControlsRail label={gt("Virtual machine controls")}>
       <PreviewRailButton
         tooltipSide="left"
-        label={props.screenshotPending ? "Capturing screenshot" : "Save screenshot"}
+        label={props.screenshotPending ? gt("Capturing screenshot") : gt("Save screenshot")}
         disabled={!props.viewer.streaming || props.screenshotPending}
         onClick={props.onScreenshot}
       >
@@ -30,8 +32,8 @@ export function VirtualMachineControlsRail(props: {
             <Button
               size="icon-sm"
               variant="ghost"
-              aria-label="More VM actions"
-              title="More VM actions"
+              aria-label={gt("More VM actions")}
+              title={gt("More VM actions")}
             />
           }
         >
@@ -40,20 +42,20 @@ export function VirtualMachineControlsRail(props: {
         <MenuPopup side="left" align="end">
           <MenuItem onClick={props.onFloat}>
             <PictureInPicture2 />
-            Float VM over chat
+            <T>Float VM over chat</T>
           </MenuItem>
           <MenuItem disabled={props.viewer.reconnecting} onClick={props.viewer.reconnect}>
             <RefreshCw />
-            Reconnect VM viewer
+            <T>Reconnect VM viewer</T>
           </MenuItem>
           <MenuItem onClick={props.onClose}>
             <X />
-            Close VM view
+            <T>Close VM view</T>
           </MenuItem>
           <MenuSeparator />
           <MenuItem variant="destructive" onClick={props.onSuspend}>
             <Power />
-            Suspend VM
+            <T>Suspend VM</T>
           </MenuItem>
         </MenuPopup>
       </Menu>

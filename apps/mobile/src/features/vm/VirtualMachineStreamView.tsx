@@ -1,3 +1,4 @@
+import { T, useGT } from "gt-react-native";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { View } from "react-native";
 import { WebView } from "react-native-webview";
@@ -23,6 +24,7 @@ export function VirtualMachineStreamView(props: {
   readonly uri: string;
   readonly onFailure: (message: string) => void;
 }) {
+  const gt = useGT();
   const view = useRef<WebView<object>>(null);
   const [status, setStatus] = useState("connecting");
   const { themeVariables: colors } = useAppearancePreferences();
@@ -49,7 +51,7 @@ export function VirtualMachineStreamView(props: {
   }, [theme]);
   const streaming = status === "streaming";
   const expireStartup = useEffectEvent(() =>
-    props.onFailure("The desktop has not connected yet. Reconnect to try again."),
+    props.onFailure(gt("The desktop has not connected yet. Reconnect to try again.")),
   );
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- bounds startup and reconnect waiting without extending it for status chatter
   useEffect(() => {
@@ -79,21 +81,27 @@ export function VirtualMachineStreamView(props: {
               message.status === "failed"
             ) {
               if (message.status === "failed" && streaming) {
-                props.onFailure("The desktop connection stopped. Reconnect to try again.");
+                props.onFailure(gt("The desktop connection stopped. Reconnect to try again."));
               } else setStatus(message.status);
             }
           }
         }}
-        onError={() => props.onFailure("The VM view could not connect. Reconnect to try again.")}
+        onError={() =>
+          props.onFailure(gt("The VM view could not connect. Reconnect to try again."))
+        }
         onHttpError={({ nativeEvent }) =>
           props.onFailure(
-            `The VM view could not load (HTTP ${nativeEvent.statusCode}). Reconnect to try again.`,
+            gt("The VM view could not load (HTTP {status}). Reconnect to try again.", {
+              status: nativeEvent.statusCode,
+            }),
           )
         }
         onContentProcessDidTerminate={() =>
-          props.onFailure("The VM view stopped. Reconnect to try again.")
+          props.onFailure(gt("The VM view stopped. Reconnect to try again."))
         }
-        onRenderProcessGone={() => props.onFailure("The VM view stopped. Reconnect to try again.")}
+        onRenderProcessGone={() =>
+          props.onFailure(gt("The VM view stopped. Reconnect to try again."))
+        }
       />
       {!streaming ? (
         <View className="absolute inset-0 bg-background">
@@ -105,11 +113,11 @@ export function VirtualMachineStreamView(props: {
               <AppActivityIndicator />
               <AppText accessibilityLiveRegion="polite" className="text-center">
                 {status === "reconnecting"
-                  ? "Reconnecting to desktop…"
-                  : "Connecting to desktop and preparing input…"}
+                  ? gt("Reconnecting to desktop…")
+                  : gt("Connecting to desktop and preparing input…")}
               </AppText>
               <AppText className="text-center text-foreground-muted">
-                You can leave this view while the desktop starts.
+                <T>You can leave this view while the desktop starts.</T>
               </AppText>
             </View>
           </ScreenScrollView>

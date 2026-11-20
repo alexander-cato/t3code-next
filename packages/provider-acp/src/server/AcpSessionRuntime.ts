@@ -1291,6 +1291,7 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
     Option.none(),
   );
   const stoppingRef = yield* Ref.make(false);
+  const terminationRecorded = yield* Deferred.make<void>();
   const stderrFailure = yield* Deferred.make<never, EffectAcpErrors.AcpError>();
   const stderrTailRef = yield* Ref.make("");
   const homeDirectory = yield* HostProcess.HomeDirectory;
@@ -1352,10 +1353,13 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
         : ([true, Option.some(enriched)] as const),
     );
     if (!firstTermination) {
-      return;
+      return yield* Deferred.await(terminationRecorded);
     }
-    yield* closeActiveAssistantSegment({ queue: eventQueue, assistantSegmentRef });
-    yield* Queue.offer(eventQueue, { _tag: "ConnectionTerminated", error: enriched });
+    yield* Effect.gen(function* () {
+      yield* closeActiveAssistantSegment({ queue: eventQueue, assistantSegmentRef });
+      yield* Queue.offer(eventQueue, { _tag: "ConnectionTerminated", error: enriched });
+      yield* options.onTermination?.(enriched) ?? Effect.void;
+    }).pipe(Effect.ensuring(Deferred.succeed(terminationRecorded, undefined)));
   });
 
   const logRequest = (event: AcpSessionRequestLogEvent) =>
@@ -1666,8 +1670,8 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
         ),
         Effect.catch((error) =>
           Effect.gen(function* () {
-            yield* Deferred.fail(stderrFailure, error);
             yield* recordTermination(error);
+            yield* Deferred.fail(stderrFailure, error);
             yield* child.kill({ forceKillAfter: "1 second" }).pipe(Effect.ignore);
           }),
         ),
@@ -1694,7 +1698,6 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
       ...(options.onIncomingRequest ? { onIncomingRequest: options.onIncomingRequest } : {}),
       onTermination: (error) =>
         recordTermination(error).pipe(
-          Effect.andThen(options.onTermination?.(error) ?? Effect.void),
           Effect.ensuring(
             Scope.close(runtimeScope, Exit.fail(error)).pipe(Effect.forkDetach, Effect.asVoid),
           ),
@@ -1708,12 +1711,15 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
 
   const acp = yield* Effect.service(EffectAcpClient.AcpClient).pipe(Effect.provide(acpContext));
 
-  // Counts applied `config_option_update`s; see setConfigOption.
+  // Count applied `config_option_update`s and `current_mode_update`s; see setConfigOption.
   const configOptionUpdates = yield* Ref.make(0);
+  const modeUpdates = yield* Ref.make(0);
   const processSessionUpdate = (notification: EffectAcpSchema.SessionNotification) =>
     (notification.update.sessionUpdate === "config_option_update"
       ? Ref.update(configOptionUpdates, (count) => count + 1)
-      : Effect.void
+      : notification.update.sessionUpdate === "current_mode_update"
+        ? Ref.update(modeUpdates, (count) => count + 1)
+        : Effect.void
     ).pipe(
       Effect.andThen(
         handleSessionUpdate({
@@ -1902,9 +1908,18 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
       | EffectAcpSchema.LoadSessionResponse
       | EffectAcpSchema.NewSessionResponse
       | EffectAcpSchema.ResumeSessionResponse,
+    syncMode = true,
   ) {
     const configOptions = sessionConfigOptionsFromSetup(response);
     yield* SubscriptionRef.set(configOptionsRef, configOptions);
+    // A mode set as a config option is the session's mode, as for a pushed config_option_update,
+    // unless the agent reported a newer mode while the write was in flight.
+    if (syncMode) {
+      yield* Ref.update(
+        modeStateRef,
+        (current) => parseSessionModeState({ configOptions }) ?? current,
+      );
+    }
     yield* Queue.offer(eventQueue, {
       _tag: "ConfigOptionsUpdated",
       configOptions,
@@ -2095,17 +2110,19 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
             // newer than its result: Kiro 2.32 answers a `model` write
             // without `model`, then advertises it, and that update can be
             // handled before this fiber resumes. The result then stays out.
-            return Ref.get(configOptionUpdates).pipe(
-              Effect.flatMap((updatesBefore) =>
+            return Effect.all([Ref.get(configOptionUpdates), Ref.get(modeUpdates)]).pipe(
+              Effect.flatMap(([updatesBefore, modesBefore]) =>
                 runLoggedRequest(
                   "session/set_config_option",
                   requestPayload,
                   acp.agent.setSessionConfigOption(requestPayload),
                 ).pipe(
                   Effect.tap((response) =>
-                    Ref.get(configOptionUpdates).pipe(
-                      Effect.flatMap((updatesNow) =>
-                        updatesNow === updatesBefore ? updateConfigOptions(response) : Effect.void,
+                    Effect.all([Ref.get(configOptionUpdates), Ref.get(modeUpdates)]).pipe(
+                      Effect.flatMap(([updatesNow, modesNow]) =>
+                        updatesNow === updatesBefore
+                          ? updateConfigOptions(response, modesNow === modesBefore)
+                          : Effect.void,
                       ),
                     ),
                   ),
@@ -2764,12 +2781,15 @@ export const make = Effect.fn("AcpSessionRuntime.make")(function* (
         yield* updateCurrentModeId(modeId);
         return {} satisfies EffectAcpSchema.SetSessionModeResponse;
       }
+      const before = yield* Ref.get(modeStateRef);
       const response = yield* setConfigOption(modeConfigOption?.id ?? "mode", modeId);
-      const reported = parseSessionModeState({ configOptions: response.configOptions });
-      if (reported === undefined) {
+      // A reply that reports the mode already set the state, and a newer pushed update replaces the
+      // state object; only an uninformative reply with no update in between falls back to the ack.
+      if (
+        parseSessionModeState({ configOptions: response.configOptions }) === undefined &&
+        (yield* Ref.get(modeStateRef)) === before
+      ) {
         yield* updateCurrentModeId(modeId);
-      } else {
-        yield* updateCurrentModeId(reported.currentModeId);
       }
       return {} satisfies EffectAcpSchema.SetSessionModeResponse;
     }),

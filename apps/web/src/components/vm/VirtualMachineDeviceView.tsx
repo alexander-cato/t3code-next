@@ -4,6 +4,7 @@ import { virtualMachineViewerUrl } from "@t3tools/client-runtime/state/virtual-m
 import type { ScopedThreadRef, VirtualMachineViewer } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { CircleAlert, Power, X } from "lucide-react";
+import { T, useGT } from "gt-react";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import { Button } from "~/components/ui/button";
@@ -61,6 +62,7 @@ export function VirtualMachineDeviceView({
   readonly visible: boolean;
   readonly onScreen?: (screen: VirtualMachineScreenSize) => void;
 }) {
+  const gt = useGT();
   const { environmentId, threadId } = threadRef;
   const surfaceId = placement.kind === "tab" ? placement.surfaceId : null;
   const supported = useVirtualMachinesSupported(environmentId);
@@ -79,10 +81,11 @@ export function VirtualMachineDeviceView({
       if (result._tag === "Failure")
         toastManager.add({
           type: "error",
-          title: `Could not confirm ${name} disconnected`,
-          description:
-            "The view is closed, but VM control may still be connected on the server. " +
-            formatEnvironmentQueryError(result.cause),
+          title: gt("Could not confirm {name} disconnected", { name }),
+          description: gt(
+            "The view is closed, but VM control may still be connected on the server. {error}",
+            { error: formatEnvironmentQueryError(result.cause) },
+          ),
         });
     });
   const [viewer, setViewer] = useState<HeldViewer | null>(null);
@@ -150,8 +153,8 @@ export function VirtualMachineDeviceView({
       setPending({
         message:
           machine && isRunningVirtualMachine(machine)
-            ? "Connecting to desktop…"
-            : "Starting macOS and preparing desktop input…",
+            ? gt("Connecting to desktop…")
+            : gt("Starting macOS and preparing desktop input…"),
         connecting: true,
       });
       setBusy(true);
@@ -177,7 +180,7 @@ export function VirtualMachineDeviceView({
         return false;
       }
       if (result.value.expiresInMs <= 0) {
-        setError("The desktop connection has expired. Try reconnecting.");
+        setError(gt("The desktop connection has expired. Try reconnecting."));
         return false;
       }
       setViewer({
@@ -312,7 +315,7 @@ export function VirtualMachineDeviceView({
 
   const suspendMachine = async () => {
     invalidateViewer();
-    setPending({ message: "Suspending virtual machine…" });
+    setPending({ message: gt("Suspending virtual machine…") });
     setBusy(true);
     setError(null);
     const result = await stop({ environmentId, input: { name } });
@@ -350,7 +353,7 @@ export function VirtualMachineDeviceView({
     if (result._tag === "Failure") {
       toastManager.add({
         type: "error",
-        title: "Could not save screenshot",
+        title: gt("Could not save screenshot"),
         description: formatEnvironmentQueryError(result.cause),
       });
       return;
@@ -392,7 +395,7 @@ export function VirtualMachineDeviceView({
             <Button
               size="icon-xs"
               variant="ghost"
-              aria-label="Dismiss virtual machine error"
+              aria-label={gt("Dismiss virtual machine error")}
               onClick={() => setError(null)}
             >
               <X />
@@ -427,39 +430,39 @@ export function VirtualMachineDeviceView({
       ) : (
         <GuestStatusView
           name={name}
-          description="macOS virtual machine"
+          description={gt("macOS virtual machine")}
           error={!!failure && !busy}
           message={
             (busy
               ? pending?.message
               : failure
-                ? "The desktop could not connect. Try reconnecting or close this view."
-                : "Connecting to desktop…") ?? ""
+                ? gt("The desktop could not connect. Try reconnecting or close this view.")
+                : gt("Connecting to desktop…")) ?? ""
           }
         >
           {pending?.connecting && busy && (
             <p className="max-w-xs text-xs text-muted-foreground">
-              macOS startup can take a few minutes. Closing this view keeps the VM running.
+              <T>macOS startup can take a few minutes. Closing this view keeps the VM running.</T>
             </p>
           )}
           <div className="flex flex-wrap justify-center gap-2">
             <Button variant="outline" size="sm" onClick={closeView}>
-              Close view
+              <T>Close view</T>
             </Button>
             {failure && !busy && (
               <>
                 <Button size="sm" disabled={!canOperate} onClick={() => void openMachine()}>
-                  Retry connection
+                  <T>Retry connection</T>
                 </Button>
                 {running && (
                   <Button
                     variant="destructive-outline"
                     size="sm"
                     disabled={!canOperate}
-                    aria-label={`Suspend ${name}`}
+                    aria-label={gt("Suspend {name}", { name })}
                     onClick={() => void suspendMachine()}
                   >
-                    <Power /> Suspend
+                    <Power /> <T context="verb, suspends a virtual machine">Suspend</T>
                   </Button>
                 )}
               </>
@@ -467,8 +470,10 @@ export function VirtualMachineDeviceView({
           </div>
           {failure && !busy && (
             <p className="max-w-xs text-xs text-muted-foreground">
-              Close keeps the VM running. Suspend releases CPU and memory and disconnects all open
-              views of this VM.
+              <T>
+                Close keeps the VM running. Suspend releases CPU and memory and disconnects all open
+                views of this VM.
+              </T>
             </p>
           )}
         </GuestStatusView>

@@ -102,6 +102,14 @@ import {
   AgentSessionScanError,
 } from "./agentSessions.ts";
 import {
+  SkillLibraryError,
+  SkillLibraryListInput,
+  SkillLibraryMutation,
+  SkillLibraryPreviewSourceInput,
+  SkillLibrarySnapshot,
+  SkillSourcePreview,
+} from "./skillLibrary.ts";
+import {
   AssetAccessError,
   AssetCreateUrlInput,
   AssetCreateUrlResult,
@@ -177,6 +185,7 @@ import {
   IssueCreateInput,
   IssueCreateResult,
   IssueDetail,
+  IssueLinkedThreadsResult,
   IssueListInput,
   IssueListResult,
   IssueOperationError,
@@ -192,6 +201,7 @@ import {
   IssueTrackerConnectionList,
   IssueUnavailableError,
   IssueUpdateInput,
+  ThreadIssueKey,
 } from "./issue.ts";
 import {
   GuestShareCreateError,
@@ -465,6 +475,9 @@ export const WS_METHODS = {
   filesystemGetMetadata: "filesystem.getMetadata",
   agentSessionsScan: "agentSessions.scan",
   agentSessionsImport: "agentSessions.import",
+  skillsList: "skills.list",
+  skillsPreviewSource: "skills.previewSource",
+  skillsMutate: "skills.mutate",
   assetsCreateUrl: "assets.createUrl",
   assetsPersistChatAttachments: "assets.persistChatAttachments",
   attachmentsCreateUploadUrl: "attachments.createUploadUrl",
@@ -657,6 +670,7 @@ export const WS_METHODS = {
   issuesUpdate: "issues.update",
   issuesSetState: "issues.setState",
   issuesReact: "issues.react",
+  issuesLinkedThreads: "issues.linkedThreads",
   issueTrackersList: "issueTrackers.list",
   issueTrackersConnect: "issueTrackers.connect",
   issueTrackersBindProject: "issueTrackers.bindProject",
@@ -1361,6 +1375,12 @@ const WsIssuesDetailRpc = Rpc.make(WS_METHODS.issuesDetail, {
 });
 
 /** Older comments, one page at a time, past the cursor the detail handed over. */
+const WsIssuesLinkedThreadsRpc = Rpc.make(WS_METHODS.issuesLinkedThreads, {
+  payload: ThreadIssueKey,
+  success: IssueLinkedThreadsResult,
+  error: IssueRpcError,
+});
+
 const WsIssuesCommentsRpc = Rpc.make(WS_METHODS.issuesComments, {
   payload: IssueCommentsPageInput,
   success: IssueCommentsPage,
@@ -1619,6 +1639,26 @@ const WsAgentSessionsImportRpc = Rpc.make(WS_METHODS.agentSessionsImport, {
     AgentSessionScanError,
     EnvironmentAuthorizationError,
   ]),
+});
+
+const SkillLibraryRpcError = Schema.Union([SkillLibraryError, EnvironmentAuthorizationError]);
+
+const WsSkillsListRpc = Rpc.make(WS_METHODS.skillsList, {
+  payload: SkillLibraryListInput,
+  success: SkillLibrarySnapshot,
+  error: SkillLibraryRpcError,
+});
+
+const WsSkillsPreviewSourceRpc = Rpc.make(WS_METHODS.skillsPreviewSource, {
+  payload: SkillLibraryPreviewSourceInput,
+  success: SkillSourcePreview,
+  error: SkillLibraryRpcError,
+});
+
+const WsSkillsMutateRpc = Rpc.make(WS_METHODS.skillsMutate, {
+  payload: SkillLibraryMutation,
+  success: SkillLibrarySnapshot,
+  error: SkillLibraryRpcError,
 });
 
 const WsAssetsCreateUrlRpc = Rpc.make(WS_METHODS.assetsCreateUrl, {
@@ -2324,6 +2364,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsIssuesCommentsRpc,
   WsIssuesTemplatesRpc,
   WsIssuesCandidatesRpc,
+  WsIssuesLinkedThreadsRpc,
   WsIssuesCreateRpc,
   WsIssuesCommentRpc,
   WsIssuesUpdateRpc,
@@ -2468,6 +2509,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsFilesystemGetMetadataRpc,
   WsAgentSessionsScanRpc,
   WsAgentSessionsImportRpc,
+  WsSkillsListRpc,
+  WsSkillsPreviewSourceRpc,
+  WsSkillsMutateRpc,
   WsAssetsCreateUrlRpc,
   WsAssetsPersistChatAttachmentsRpc,
   WsAttachmentsCreateUploadUrlRpc,

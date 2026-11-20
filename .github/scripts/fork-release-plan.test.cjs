@@ -11,6 +11,7 @@ function fixture() {
     latest: "success",
     current: [{ tag_name: "v0.1.10-nightly.20261114.391" }],
     ancestry: "ahead",
+    files: [{ filename: "apps/web/src/index.ts" }],
   };
   const github = {
     rest: {
@@ -26,7 +27,9 @@ function fixture() {
           },
         }),
         listReleases: () => {},
-        compareCommitsWithBasehead: async () => ({ data: { status: state.ancestry } }),
+        compareCommitsWithBasehead: async () => ({
+          data: { status: state.ancestry, files: state.files },
+        }),
         getContent: async () => ({
           data: {
             type: "file",
@@ -131,6 +134,37 @@ test("rejects an unsigned commit, unprotected main, failed latest CI, and untrus
   await assert.rejects(resolveRelease(input), /manual main dispatch/);
   input.context.ref = "refs/heads/feature";
   await assert.rejects(resolveRelease(input), /protected main branch/);
+});
+
+test("skips a release when only CI, docs, or notes changed since the previous one, unless forced", async () => {
+  const released = (input) => {
+    input.state.current = [
+      {
+        tag_name: "v0.1.10-nightly.20261114.400",
+        draft: false,
+        published_at: "2026-11-14T00:00:00Z",
+      },
+    ];
+    return input;
+  };
+  const unshipped = [
+    { filename: ".github/workflows/ci.yml" },
+    { filename: "docs/operations/development.md" },
+    { filename: "AGENTS.md" },
+  ];
+  for (const [files, build] of [
+    [unshipped, false],
+    [[...unshipped, { filename: "apps/desktop/src/main.ts" }], true],
+    [[{ filename: ".github/scripts/x.cjs", previous_filename: "scripts/x.ts" }], true],
+    [Array.from({ length: 300 }, () => ({ filename: "docs/a.md" })), true],
+  ]) {
+    const input = released(fixture());
+    input.state.files = files;
+    assert.equal((await resolveRelease(input)).build, build);
+  }
+  const forced = released(fixture());
+  forced.state.files = unshipped;
+  assert.equal((await resolveRelease({ ...forced, force: true })).build, true);
 });
 
 test("refuses release rollback and fails closed when release history cannot be read", async () => {

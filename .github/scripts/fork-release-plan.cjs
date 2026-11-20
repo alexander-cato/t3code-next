@@ -1,4 +1,7 @@
 const SHA = /^[a-f0-9]{40}$/;
+const UNSHIPPED = /^(?:\.github|docs)\/|\.md$/;
+// The compare API lists at most 300 files, so a full page may hide shipped changes.
+const MAX_COMPARE_FILES = 300;
 const NIGHTLY = /^v?(\d+)\.(\d+)\.(\d+)-nightly\.(\d{8})\.(\d+)$/;
 
 function parseNightly(value) {
@@ -118,6 +121,21 @@ async function resolveRelease({ github, context, force = false, now = new Date()
       throw new Error(
         "Refusing to release source older than or divergent from the previous release.",
       );
+    const files = comparison.files;
+    if (
+      !force &&
+      Array.isArray(files) &&
+      files.length < MAX_COMPARE_FILES &&
+      files.every(
+        (file) =>
+          UNSHIPPED.test(file.filename) &&
+          (!file.previous_filename || UNSHIPPED.test(file.previous_filename)),
+      )
+    )
+      return {
+        build: false,
+        reason: "Only CI, docs, or notes changed since the previous release.",
+      };
   }
   const { data: manifest } = await github.rest.repos.getContent({
     ...repository,

@@ -27,6 +27,9 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.virtualMachineAdopt]: AuthOrchestrationOperateScope,
   [WS_METHODS.virtualMachineScreenshot]: AuthOrchestrationOperateScope,
   [WS_METHODS.providerAuthRemoveMethod]: AuthProvidersManageScope,
+  // Previewing clones a repository, and an update check fetches every source.
+  [WS_METHODS.skillsPreviewSource]: AuthProvidersManageScope,
+  [WS_METHODS.skillsMutate]: AuthProvidersManageScope,
   [WS_METHODS.previewClose]: AuthPreviewOperateScope,
   // Stopping a server signals its processes, as closing a terminal does.
   [WS_METHODS.previewStopLocalServer]: AuthTerminalOperateScope,

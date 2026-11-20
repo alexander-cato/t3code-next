@@ -5,11 +5,6 @@ export {
   makeAcpRegistryAdapterV2,
   registerMistralVibeAcpExtensions,
 } from "./server/adapter.ts";
-export {
-  extractDevinSubagentUpdate,
-  normalizeDevinSessionUpdate,
-  normalizeDevinToolCall,
-} from "./server/devinAcp.ts";
 export { extractCopilotSubagentUpdate, makeCopilotSubagentRouting } from "./server/copilotAcp.ts";
 export {
   acpRegistryProbeFailure,
