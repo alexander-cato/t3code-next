@@ -4,6 +4,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
+import { useGT } from "gt-react";
 import { DownloadIcon } from "lucide-react";
 import { useRef, useState } from "react";
 
@@ -23,6 +24,7 @@ export function AcpRegistryPrepareButton({
   readonly installed: boolean;
   readonly readOnly: boolean;
 }) {
+  const gt = useGT();
   const canPrepare = useAtomValue(
     serverEnvironment.prepareAcpRegistryAgent.permissionAtom(environmentId),
   );
@@ -40,11 +42,14 @@ export function AcpRegistryPrepareButton({
     pendingRef.current = true;
     setPending(true);
     setError(null);
-    const result = await prepare({ environmentId, input: { agentId } });
+    const result = await prepare({
+      environmentId,
+      input: installed ? { agentId, repair: true } : { agentId },
+    });
     if (result._tag === "Failure") {
       if (!isAtomCommandInterrupted(result)) {
         const failure = squashAtomCommandFailure(result);
-        setError(failure instanceof Error ? failure.message : "Could not prepare the agent.");
+        setError(failure instanceof Error ? failure.message : gt("Could not prepare the agent."));
       }
     } else if (canRefresh) {
       await refresh({ environmentId, input: { refreshModels: true } });
@@ -63,7 +68,7 @@ export function AcpRegistryPrepareButton({
         onClick={() => void prepareAgent()}
       >
         {pending ? <Spinner /> : <DownloadIcon />}
-        {pending ? "Preparing…" : installed ? "Repair installation" : "Prepare agent"}
+        {pending ? gt("Preparing…") : installed ? gt("Repair installation") : gt("Prepare agent")}
       </Button>
       {error ? (
         <p role="alert" className="text-xs text-destructive [overflow-wrap:anywhere]">

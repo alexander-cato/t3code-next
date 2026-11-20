@@ -511,6 +511,10 @@ describe("AcpRegistrySupport", () => {
       const npmCommands = yield* fileSystem.readFileString(toolchain.logPath);
       expect(npmCommands.match(/^install --global /gmu)).toHaveLength(1);
       expect(npmCommands).toContain("install --global @example/acp@V1.2.3");
+
+      yield* resolver.prepare({ agentId: agent.id, repair: true });
+      const repairedCommands = yield* fileSystem.readFileString(toolchain.logPath);
+      expect(repairedCommands.match(/^install --global /gmu)).toHaveLength(2);
     }).pipe(
       Effect.scoped,
       Effect.provide(
@@ -769,6 +773,15 @@ describe("AcpRegistrySupport", () => {
         "#!/bin/sh\necho example\n",
       );
       expect(requests).toEqual([registryUrl, archiveUrl]);
+
+      yield* fileSystem.writeFileString(first.spawn.command, "damaged");
+      yield* resolver.prepare({ agentId: agent.id });
+      expect(yield* fileSystem.readFileString(first.spawn.command)).toBe("damaged");
+      yield* resolver.prepare({ agentId: agent.id, repair: true });
+      expect(yield* fileSystem.readFileString(first.spawn.command)).toBe(
+        "#!/bin/sh\necho example\n",
+      );
+      expect(requests).toEqual([registryUrl, archiveUrl, registryUrl, registryUrl, archiveUrl]);
     }).pipe(
       Effect.scoped,
       Effect.provide(

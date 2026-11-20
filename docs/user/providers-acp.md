@@ -46,7 +46,8 @@ connect through `app.t3.codes`, T3 Connect, or a relay.
 
 Enabled registry agents prepare automatically when the environment starts, including after importing
 settings. If a download fails, choose **Prepare agent** in the provider's settings to retry without
-removing its saved configuration.
+removing its saved configuration. If an installed agent stops working, **Repair installation**
+downloads and installs it again.
 
 Agents install under `tools/<agent-id>/<version>/` inside T3 home. T3 Code verifies SHA-256 when the Registry entry
 provides one; entries without a checksum retain the Registry's HTTPS distribution guarantee.
