@@ -3412,6 +3412,8 @@
   "7fa92b78ba609ca7": "As threads em execução que compartilham este login em {environment} vão parar. O histórico das threads é mantido.",
   "a656dc69a38a3639": "Sair",
   "99bb27b91bab1824": "Trocar de conta",
+  "ef6e7ce086530e33": "Preparar agente",
+  "d2fff7c7faf75c0c": "Preparar {provider}",
   "f2e393e1419f8c99": "Documentação",
   "7418b73b1961e980": "Não foi possível abrir a documentação do provedor.",
   "eedf7b1e0e29cdec": "Cancelar login no {provider}",
