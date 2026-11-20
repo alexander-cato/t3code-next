@@ -8149,7 +8149,7 @@
   "e2397769824ca81d": "Simuladores e emuladores instalados na máquina deste ambiente.",
   "672cd60933977c0f": "Testando conexão",
   "2e10c5faf3870279": "Não foi possível conectar",
-  "e5624bd8af85b53d": "Fontes de dispositivos",
+  "65d3e5f89ff5de26": "Fontes de simuladores",
   "344668144ff90eb3": "Disponível",
   "4f58bcacf894c5bc": "Indisponível",
   "bc311f08f44d2e5c": "{source}: {platform} disponível",
@@ -8401,6 +8401,8 @@
   "73e76ba75c8d3096": "Não foi possível atualizar {environments}.",
   "b16605b8957226ea": "Atualizar",
   "f8571b5368d6d847": "Verificar versões",
+  "fb2ef161e0394181": "Abra simuladores iOS e emuladores Android no painel Dispositivo.",
+  "e9c435c2e249fda2": "Novas sessões de agente podem abrir e controlar os dispositivos ativados acima.",
   "388698edad9faf0e": "Acesso dos agentes a dispositivos",
   "1cc07e37777f5c12": "Não foi possível alterar o acesso a máquinas virtuais",
   "625a55d0a549fcde": "Execute VMs macOS locais neste ambiente por meio do Lume e do Cua. Os agentes as controlam quando podem usar dispositivos. Desativar isso fecha as visualizações de VM sem excluir discos nem parar VMs em execução.",
@@ -8431,16 +8433,16 @@
   "fedb5397301d3392": "Preencher painel",
   "2fdc83ad8b55eb11": "Responsivo",
   "cf05007f2ba8ad42": "Girar",
-  "862a3e2e99dfadb6": [
-    "Abra simuladores e emuladores no painel Dispositivo. Hub:",
+  "1ffd14fde9845fd5": [
+    "Hub de dispositivos:",
     " ",
     {
       "t": "DeviceToolVersions",
       "i": 1
     }
   ],
-  "151f86b6dcd56244": [
-    "Novas sessões de agente podem abrir e controlar estes dispositivos. agent-device:",
+  "fd8ff421e9b437c0": [
+    "agent-device:",
     " ",
     {
       "t": "DeviceToolVersions",
@@ -11659,7 +11661,7 @@
   "345075be6cacc171": "dispositivo hosts ssh remoto mac mini identidade chave conexão eas expo nuvem simlock pool gateway simuladores locais",
   "a6b742430b05d6cc": "Agentes podem usar dispositivos",
   "1d5d7418a83575c2": "permitir simulador emulador ios android controlar ferramentas sessões",
-  "60f0825756e404dc": "Usar dispositivos",
+  "9dd51dc4ba3cc651": "Simuladores e emuladores",
   "907782e153a139a3": "dispositivo hub simulador emulador ios android instalar iniciar versão",
   "ad89031709b521b8": "simulador suporte xcode android studio sdk avd runtime",
   "98a0d9d96a4b98f1": "Perfis do navegador",
