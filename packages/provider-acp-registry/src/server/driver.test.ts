@@ -12,6 +12,7 @@ import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import { toCustomModelSetting } from "@t3tools/shared/model";
 import { AcpRegistrySettings } from "../settings.ts";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -1190,6 +1191,82 @@ it.layer(driverLayer, { excludeTestServices: true })("AcpRegistryDriver", (it) =
       yield* instance.snapshot.refresh;
       const next = yield* Fiber.join(nextPublished);
       expect(Option.map(next, (snapshot) => snapshot.version)).toEqual(Option.some("1.5.9"));
+    }),
+  );
+
+  it.effect("discovers sign-in methods once startup prepares a missing agent", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "acp-driver-" });
+      const agentPath = path.join(directory, "agent.mjs");
+      const modelsPath = path.join(directory, "models.json");
+      yield* fileSystem.writeFileString(
+        agentPath,
+        fakeAgentSource.replace(
+          "authMethods: []",
+          'authMethods: [{ id: "login", name: "Log in" }]',
+        ),
+      );
+      yield* fileSystem.writeFileString(modelsPath, JSON.stringify(["model-a"]));
+      let installed = false;
+      let unpreparedInspections = 0;
+      // The first sign-in discovery must fail on the unprepared agent, as it does while a download runs.
+      const discoveryFailed = yield* Deferred.make<void>();
+
+      const instance = yield* AcpRegistryDriver.create({
+        instanceId: identity.instanceId,
+        displayName: identity.displayName,
+        enabled: true,
+        environment: [],
+        config: decodeSettings({ agentId: "test-agent" }),
+      }).pipe(
+        Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, {
+          ...catalogWithInspection({ status: "unconfigured" }),
+          inspect: (settings) =>
+            Effect.gen(function* () {
+              if (!installed && ++unpreparedInspections === 2) {
+                yield* Deferred.succeed(discoveryFailed, undefined);
+              }
+              return {
+                status: installed ? ("ready" as const) : ("unprepared" as const),
+                agentId: settings.agentId,
+                version: "1.0.0",
+                distribution: "binary" as const,
+              };
+            }),
+          prepare: ({ agentId }) =>
+            Deferred.await(discoveryFailed).pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  installed = true;
+                  return {
+                    agentId,
+                    version: "1.0.0",
+                    distribution: "binary" as const,
+                    prepared: true as const,
+                  };
+                }),
+              ),
+            ),
+          resolve: () =>
+            Effect.succeed({
+              distribution: "binary" as const,
+              spawn: { command: process.execPath, args: [agentPath, modelsPath] },
+            }),
+        }),
+      );
+      const ready = yield* instance.snapshot.streamChanges.pipe(
+        Stream.filter((snapshot) => snapshot.installed),
+        Stream.runHead,
+        Effect.forkScoped({ startImmediately: true }),
+      );
+      yield* Fiber.join(ready);
+
+      const state = yield* instance.auth!.subscribe("test-owner").pipe(Stream.runHead);
+      expect(Option.map(state, (current) => current.methods?.map((method) => method.id))).toEqual(
+        Option.some(["login"]),
+      );
     }),
   );
 

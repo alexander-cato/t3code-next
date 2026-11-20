@@ -16,6 +16,7 @@ import * as Clock from "effect/Clock";
 import * as Digest from "effect/crypto/Digest";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Option from "effect/Option";
@@ -572,6 +573,7 @@ export const checkAcpRegistryProviderReadiness = Effect.fn(
   input: SnapshotIdentity & {
     readonly settings: AcpRegistrySettings;
     readonly environment: NodeJS.ProcessEnv;
+    readonly onPrepared?: Effect.Effect<void>;
   },
 ): Effect.fn.Return<ServerProvider, never, AcpRegistrySupport.AcpRegistryCatalog> {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
@@ -584,9 +586,10 @@ export const checkAcpRegistryProviderReadiness = Effect.fn(
       Effect.filterOrElse(
         (inspection) => inspection.status !== "unprepared",
         (inspection) =>
-          catalog
-            .prepare({ agentId: inspection.agentId })
-            .pipe(Effect.andThen(catalog.inspect(input.settings, input.environment))),
+          catalog.prepare({ agentId: inspection.agentId }).pipe(
+            Effect.andThen(catalog.inspect(input.settings, input.environment)),
+            Effect.tap(() => input.onPrepared ?? Effect.void),
+          ),
       ),
     ),
   );
@@ -744,7 +747,12 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
     });
     // A local executable's version comes only from probing it, so readiness checks reuse the last report.
     const reportedLocalVersion = yield* Ref.make<string | null>(null);
-    const checkProvider = checkAcpRegistryProviderReadiness(readinessInput).pipe(
+    // Auth discovery fails while the agent is unprepared, and the controller is built after the snapshot.
+    const refreshAuthMethods = yield* Deferred.make<Effect.Effect<void>>();
+    const checkProvider = checkAcpRegistryProviderReadiness({
+      ...readinessInput,
+      onPrepared: Effect.flatten(Deferred.await(refreshAuthMethods)),
+    }).pipe(
       Effect.provideService(AcpRegistrySupport.AcpRegistryCatalog, catalog),
       Effect.flatMap((provider) =>
         Ref.get(reportedLocalVersion).pipe(
@@ -984,6 +992,7 @@ export const AcpRegistryDriver: ProviderDriver<AcpRegistrySettings, AcpRegistryD
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       Effect.provideService(SecureRandom.SecureRandom, random),
     );
+    yield* Deferred.succeed(refreshAuthMethods, controller.refreshMethods ?? Effect.void);
     const auth = {
       ...controller,
       invalidate: (controller.invalidate ?? Effect.void).pipe(
