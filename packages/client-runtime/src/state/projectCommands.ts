@@ -1,3 +1,5 @@
+import { msg } from "gt-i18n";
+import { type MarkedText, markedTextEnglish } from "../errors/translatable.ts";
 import {
   type EnvironmentId,
   ProjectId,
@@ -30,6 +32,9 @@ import { createProject, deleteProject, updateProject } from "../operations/comma
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { createFileMetadataAtoms } from "./fileMetadata.ts";
 import { resolveWorkspaceFilePath } from "@t3tools/shared/path";
+
+import { detectProjectScripts } from "./detectProjectScripts.ts";
+import { resolveProjectScripts } from "@t3tools/shared/projectScripts";
 
 export type {
   CreateProjectInput,
@@ -74,7 +79,13 @@ export class ScratchProjectNotLoadedError extends Schema.TaggedError<ScratchProj
   { projectId: ProjectId },
 ) {
   override get message(): string {
-    return "The folder for threads without a project has not reached this device yet. Try again.";
+    return markedTextEnglish(this.i18nMessage);
+  }
+
+  get i18nMessage(): MarkedText {
+    return [
+      msg("The folder for threads without a project has not reached this device yet. Try again."),
+    ];
   }
 }
 
@@ -135,6 +146,59 @@ export function createProjectEnvironmentAtoms<R, E>(
               ),
             ),
         ),
+    }),
+    generateScripts: createEnvironmentCommand(runtime, {
+      label: "environment-data:projects:generate-scripts",
+      scheduler: projectScheduler,
+      concurrency: projectConcurrency,
+      execute: Effect.fn("Project.generateScripts")(function* (
+        input: { projectId: ProjectId },
+        registry: AtomRegistry.AtomRegistry,
+        environmentId: EnvironmentId,
+      ) {
+        const project = registry.get(
+          options.projectAtom({ environmentId, projectId: input.projectId }),
+        );
+        if (!project) return false;
+        const cwd = project.workspaceRoot;
+        const listing = yield* request(WS_METHODS.projectsListEntries, { cwd, directoryPath: "" });
+        const files = new Set(
+          listing.entries.filter((entry) => entry.kind === "file").map((entry) => entry.path),
+        );
+        const manifest = files.has("package.json")
+          ? yield* request(WS_METHODS.projectsReadFile, {
+              cwd,
+              relativePath: "package.json",
+              allowMissing: true,
+            })
+          : null;
+        // Shortcut IDs are environment-wide, including scripts created concurrently on other clients.
+        const random = yield* SecureRandom.SecureRandom;
+        const idPrefix = Array.from(yield* random.randomBytes(10), (byte) =>
+          byte.toString(16).padStart(2, "0"),
+        ).join("");
+        const scripts = detectProjectScripts(
+          files,
+          manifest && !manifest.truncated ? manifest.contents : "",
+          idPrefix,
+        );
+        if (!scripts.length) return false;
+        const config = yield* request(WS_METHODS.serverGetConfig, {});
+        if (resolveProjectScripts(config.settings, project).length > 0) return true;
+        yield* requestGuarded(WS_METHODS.serverUpdateSettings, {
+          patch: config.environment.capabilities.projectSettingsOverrides
+            ? {
+                projectSettingsOverrides: {
+                  [project.id]: {
+                    ...config.settings.projectSettingsOverrides[project.id],
+                    defaultProjectScripts: scripts,
+                  },
+                },
+              }
+            : { projectScriptOverrides: { [project.id]: scripts } },
+        });
+        return true;
+      }),
     }),
     searchEntries: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:projects:search-entries",

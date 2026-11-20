@@ -1,4 +1,7 @@
 import type { DeviceServiceState, ThreadId, VirtualMachineState } from "@t3tools/contracts";
+import { msg } from "gt-react-native";
+
+import { m, type MessageResolver } from "../../i18n/messages";
 
 export const virtualMachinePreviewKey = (name: string) => JSON.stringify(["vm", name]);
 
@@ -16,6 +19,7 @@ export function threadDevicePreviews(
   threadId: ThreadId,
   virtualMachines?: VirtualMachineState | null,
   requestedVirtualMachine?: RequestedVirtualMachine,
+  resolve: MessageResolver = m,
 ) {
   const devices = (state?.sessions ?? [])
     .filter((session) => session.threadId === threadId)
@@ -59,7 +63,7 @@ export function threadDevicePreviews(
       kind: "vm" as const,
       key: virtualMachinePreviewKey(name),
       name,
-      description: "macOS virtual machine",
+      description: resolve(msg("macOS virtual machine")),
     })),
   ];
 }

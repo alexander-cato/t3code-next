@@ -1,6 +1,9 @@
 import type * as AcpSchema from "effect-acp/compat";
 import type { AcpToolCallState } from "@t3tools/provider-acp/server/runtimeModel";
-import type { AcpAdapterV2SubagentUpdate } from "@t3tools/provider-acp/server/adapter";
+import type {
+  AcpAdapterV2Flavor,
+  AcpAdapterV2SubagentUpdate,
+} from "@t3tools/provider-acp/server/adapter";
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -56,8 +59,24 @@ export function extractDevinSubagentUpdate(
 }
 
 // Devin's plan exit offers several allow_once options in no promised order; T3 never answers with bypass.
-export function devinAnswerablePermissionOptions(
+function devinAnswerablePermissionOptions(
   request: AcpSchema.RequestPermissionRequest,
 ): ReadonlyArray<AcpSchema.PermissionOption> {
   return request.options.filter((option) => option.optionId.trim() !== "plan_bypass");
 }
+
+/**
+ * Devin's ACP dialect, shared by the Devin driver and ACP Registry instances that run Devin.
+ * Devin runs commands through client terminals and has no ask mode over ACP to fall back on,
+ * so adapters also pass `clientTerminals` with `shellCommands: true`.
+ */
+export const DEVIN_ACP_FLAVOR = {
+  clientCapabilitiesMeta: {
+    "cognition.ai/subagentSupport": true,
+    "cognition.ai/messageGrouping": true,
+  },
+  normalizeSessionUpdate: normalizeDevinSessionUpdate,
+  normalizeToolCall: normalizeDevinToolCall,
+  extractSubagentUpdate: extractDevinSubagentUpdate,
+  answerablePermissionOptions: devinAnswerablePermissionOptions,
+} satisfies Partial<AcpAdapterV2Flavor>;
