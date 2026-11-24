@@ -143,7 +143,7 @@ changed. The copy starts stopped, and `device_open` boots it. T3 Code reaches
 the copy over Lume's local network, so allow the app that runs the environment
 server in **System Settings → Privacy & Security → Local Network**. The guest
 must run Cua's guest service the way Cua's own images do; see
-[macOS 27 guests](../internals/devices.md#macos-27-guests). To change such a
+[macOS 27 guests](../internals/macos-vms.md#macos-27-guests). To change such a
 base, clone it, change the clone in T3, suspend it, and clone that from then on.
 
 You can also run such a VM itself in T3. The Device panel lists macOS VMs in

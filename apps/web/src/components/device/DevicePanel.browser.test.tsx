@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   closeSurface: vi.fn(),
   virtualMachinesEnabled: false,
   virtualMachinesAvailable: true,
+  virtualMachinesPending: false,
   listVirtualMachines: vi.fn(),
 }));
 const phone = {
@@ -92,9 +93,18 @@ vi.mock("~/state/use-atom-command", () => ({
 }));
 vi.mock("~/state/query", () => ({
   formatEnvironmentQueryError: () => "Device failed",
-  useEnvironmentQuery: () => ({
-    data: { enabled: mocks.virtualMachinesEnabled, available: mocks.virtualMachinesAvailable },
-  }),
+  useEnvironmentQuery: () =>
+    mocks.virtualMachinesPending
+      ? { data: null, isPending: true, isSuccess: false, error: null }
+      : {
+          data: {
+            enabled: mocks.virtualMachinesEnabled,
+            available: mocks.virtualMachinesAvailable,
+          },
+          isPending: false,
+          isSuccess: true,
+          error: null,
+        },
 }));
 vi.mock("~/state/session", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/state/session")>()),
@@ -180,6 +190,7 @@ function setup() {
   currentState = deviceState;
   mocks.virtualMachinesEnabled = false;
   mocks.virtualMachinesAvailable = true;
+  mocks.virtualMachinesPending = false;
   mocks.listVirtualMachines.mockResolvedValue({ _tag: "Success", value: {} });
   container = document.createElement("div");
   container.style.width = "480px";
@@ -301,6 +312,29 @@ describe("DevicePanel macOS virtual machines", () => {
       );
     },
   );
+
+  it("shows the loading view for a click before the first VM snapshot", async () => {
+    setup();
+    mocks.virtualMachinesPending = true;
+    mocks.virtualMachinesEnabled = true;
+    currentState = {
+      ...deviceState,
+      hostStatus: "disabled",
+      devices: [],
+      sessions: [],
+      onboardingCompleted: true,
+    };
+    await using screen = await render(devicePanel(threadA), { container });
+    await expect.element(screen.getByText("Finding devices…")).toBeVisible();
+    expect(container.textContent?.includes("Continue")).toBe(false);
+
+    mocks.virtualMachinesPending = false;
+    await screen.rerender(devicePanel(threadA));
+    await expect
+      .element(screen.getByRole("heading", { name: "macOS virtual machines" }))
+      .toBeVisible();
+    expect(container.textContent?.includes("Continue")).toBe(false);
+  });
 
   it("finishes setup and allows agent access with only macOS VMs", async () => {
     setup();

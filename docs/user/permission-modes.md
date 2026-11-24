@@ -49,6 +49,10 @@ ACP Registry agents run their own tools in their own mode; T3 Code answers their
 by the permission mode. See [ACP Registry permissions](./providers-acp.md#permissions-and-terminals).
 Devin works the same way; see [Devin permissions](./providers-devin.md#permissions).
 
+In **Full access**, commands that Codex's dangerous-command check would ask about run without
+asking. Codex still asks before network access its managed network settings don't allow, unless
+you already allowed commands for the session.
+
 Claude can still ask in **Full access** when its settings disable bypass permissions or require
 approval for an action. Dangerous-removal safety checks in bypass mode reject the command with
 the original warning. Claude can use a safe rewrite when the warning supplies one; otherwise it
