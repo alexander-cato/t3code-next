@@ -161,7 +161,9 @@ jobs:
       - name: Review dependency changes
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
-          base-ref: ${{ needs.scope.outputs.base }}
+          # Nightly dispatch sets the upstream nightly. Dependencies it already has
+          # stay out of this scan, matching CodeQL and the secret scan.
+          base-ref: ${{ needs.scope.outputs.upstream || needs.scope.outputs.base }}
           head-ref: ${{ needs.scope.outputs.head }}
           fail-on-severity: high
           license-check: false

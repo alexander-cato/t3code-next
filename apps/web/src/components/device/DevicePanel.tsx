@@ -32,6 +32,7 @@ import {
 } from "~/state/device";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { deviceSurfaceGate, virtualMachinesEnabledSnapshot } from "./deviceSurfaceGate";
 import { DeviceLoadingView } from "./DeviceLoadingView";
 import {
   DeviceSetup,
@@ -74,9 +75,15 @@ export function DevicePanel(props: {
 
   const hostDisabled = state.hostStatus === "disabled";
   const virtualMachinesSupported = useVirtualMachinesSupported(environmentId);
-  const virtualMachines = useEnvironmentQuery(
+  const virtualMachinesQuery = useEnvironmentQuery(
     virtualMachinesSupported ? virtualMachineEnvironment.state({ environmentId, input: {} }) : null,
-  ).data;
+  );
+  const virtualMachines = virtualMachinesQuery.data;
+  const virtualMachinesEnabled = virtualMachinesEnabledSnapshot({
+    supported: virtualMachinesSupported,
+    pending: virtualMachinesQuery.isPending,
+    enabled: virtualMachines?.enabled,
+  });
   const listVirtualMachines = useAtomCommand(virtualMachineEnvironment.list, {
     reportFailure: false,
   });
@@ -235,8 +242,26 @@ export function DevicePanel(props: {
       .map((platform) => ({ ...platform, hostId: host.id, hostLabel: host.label })),
   );
 
+  const surfaceGate = deviceSurfaceGate({
+    onboardingCompleted: state.onboardingCompleted,
+    hostDisabled,
+    virtualMachinesEnabled,
+  });
+  // A click can land before the first VM snapshot. Setup would stay open after that snapshot.
+  if (loaded && surfaceGate === "loading") {
+    return (
+      <PreviewPanelShell mode={props.mode}>
+        <DeviceLoadingView
+          name={gt("Devices")}
+          stage="opening"
+          message={virtualMachinesQuery.error ?? gt("Finding devices…")}
+          error={virtualMachinesQuery.error != null}
+        />
+      </PreviewPanelShell>
+    );
+  }
   // macOS VMs need no device hub, so turning the hub off later keeps the list for them.
-  if (loaded && (!state.onboardingCompleted || (hostDisabled && !virtualMachines?.enabled))) {
+  if (loaded && surfaceGate === "setup") {
     return (
       <Dialog
         open={props.visible}

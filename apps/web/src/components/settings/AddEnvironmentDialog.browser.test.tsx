@@ -1,3 +1,4 @@
+import { EnvironmentId } from "@t3tools/contracts";
 import { Atom, AsyncResult } from "effect/reactivity";
 import * as Cause from "effect/Cause";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
@@ -60,6 +61,28 @@ function Owner() {
   );
 }
 
+function PrefillOwner() {
+  const [open, setOpen] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  return (
+    <AppAtomRegistryProvider>
+      <AddEnvironmentDialog
+        open={open}
+        prefill={{
+          environmentId: EnvironmentId.make("linked-env"),
+          label: "Build box",
+          host: "build-box.local",
+        }}
+        routeTarget={null}
+        error={error}
+        savedEnvironments={[]}
+        onOpenChange={setOpen}
+        onErrorChange={setError}
+      />
+    </AppAtomRegistryProvider>
+  );
+}
+
 function setup() {
   mocks.connectSshEnvironment.mockClear();
   return stubGlobal("desktopBridge", {});
@@ -83,6 +106,23 @@ async function expectDefaultModeAfterReopen() {
 }
 
 describe("AddEnvironmentDialog", () => {
+  it("keeps a linked-thread prefill when connecting over SSH", async () => {
+    using _bridge = setup();
+    await using _screen = await render(<PrefillOwner />);
+
+    await userEvent.click(sshCard());
+    await userEvent.fill(page.getByPlaceholder("Search hosts or type devbox"), "devbox");
+    await userEvent.click(
+      page.getByRole("dialog").getByRole("button", { name: "Add environment" }),
+    );
+
+    expect(mocks.connectSshEnvironment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedEnvironmentId: EnvironmentId.make("linked-env"),
+      }),
+    );
+  });
+
   it("reopens on Remote link after adding an SSH environment", async () => {
     using _bridge = setup();
     await using _screen = await render(<Owner />);
