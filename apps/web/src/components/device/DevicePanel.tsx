@@ -5,10 +5,10 @@ import type {
   DeviceSummary,
   ScopedThreadRef,
 } from "@t3tools/contracts";
-import { ArrowUpRight, CircleAlert, Play, Smartphone, X } from "lucide-react";
+import { ArrowUpRight, CircleAlert, Play, Smartphone, Square, X } from "lucide-react";
 import { useAtomMount } from "@effect/atom-react";
 import { T, useGT, Var } from "gt-react";
-import { type ReactNode, useEffect, useEffectEvent, useState } from "react";
+import { type ReactNode, useState } from "react";
 
 import { usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
 import {
@@ -22,6 +22,7 @@ import { Dialog } from "~/components/ui/dialog";
 import { Popover, PopoverPopup, PopoverTrigger } from "~/components/ui/popover";
 import { WizardPopup } from "~/components/ui/wizard";
 import { Spinner } from "~/components/ui/spinner";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
 import { focusPanelTerminalAfterClose } from "~/lib/terminalFocus";
 import {
@@ -30,9 +31,8 @@ import {
   NO_DEVICE_PROBE_ATOM,
   useDeviceState,
 } from "~/state/device";
-import { formatEnvironmentQueryError, useEnvironmentQuery } from "~/state/query";
+import { formatEnvironmentQueryError } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { deviceSurfaceGate, virtualMachinesEnabledSnapshot } from "./deviceSurfaceGate";
 import { DeviceLoadingView } from "./DeviceLoadingView";
 import {
   DeviceSetup,
@@ -41,8 +41,6 @@ import {
   isAndroidDiscoveryUncertain,
 } from "./DeviceSetup";
 import { DeviceWorkspace } from "./DeviceWorkspace";
-import { VirtualMachineDeviceSection } from "../vm/VirtualMachineDeviceSection";
-import { virtualMachineEnvironment, useVirtualMachinesSupported } from "~/state/virtualMachines";
 import { PreviewPanelShell, type PreviewPanelMode } from "../preview/PreviewPanelShell";
 
 const deviceKey = (device: Pick<DeviceSummary, "hostId" | "id">) =>
@@ -61,6 +59,7 @@ export function DevicePanel(props: {
   const list = useAtomCommand(deviceEnvironment.list, { reportFailure: false });
   const open = useAtomCommand(deviceEnvironment.open);
   const close = useAtomCommand(deviceEnvironment.close);
+  const shutdown = useAtomCommand(deviceEnvironment.shutdown, { reportFailure: false });
   // The panel stays mounted across thread switches, so an in-flight open or
   // power-off is tagged with the thread it belongs to and only shown there.
   const scope = `${environmentId}\u0000${threadId}`;
@@ -72,48 +71,21 @@ export function DevicePanel(props: {
   const pendingDevice = operation?.scope === scope ? operation.pending : null;
   const operationError = operation?.scope === scope ? operation.error : null;
   const pendingDeviceKey = pendingDevice ? deviceKey(pendingDevice) : null;
+  // Power-offs act on the environment, not the thread, so they outlive thread switches.
+  const [stopping, setStopping] = useState<ReadonlySet<string>>(() => new Set());
+  const [stopErrors, setStopErrors] = useState<Readonly<Record<string, string>>>({});
+  const stopError = stopErrors[environmentId];
+  const setStopError = (message: string | undefined) =>
+    setStopErrors((current) => {
+      const next = { ...current };
+      if (message === undefined) delete next[environmentId];
+      else next[environmentId] = message;
+      return next;
+    });
+  const stoppingKey = (device: DeviceSummary) => `${environmentId}\u0000${deviceKey(device)}`;
+  const isStopping = (device: DeviceSummary) => stopping.has(stoppingKey(device));
 
   const hostDisabled = state.hostStatus === "disabled";
-  const virtualMachinesSupported = useVirtualMachinesSupported(environmentId);
-  const virtualMachinesQuery = useEnvironmentQuery(
-    virtualMachinesSupported ? virtualMachineEnvironment.state({ environmentId, input: {} }) : null,
-  );
-  const virtualMachines = virtualMachinesQuery.data;
-  const virtualMachinesEnabled = virtualMachinesEnabledSnapshot({
-    supported: virtualMachinesSupported,
-    pending: virtualMachinesQuery.isPending,
-    enabled: virtualMachines?.enabled,
-  });
-  const listVirtualMachines = useAtomCommand(virtualMachineEnvironment.list, {
-    reportFailure: false,
-  });
-  const [vmDiscovery, setVmDiscovery] = useState<{
-    readonly environmentId: typeof environmentId;
-    readonly error: string | null;
-  } | null>(null);
-  const vmDiscoveryError = vmDiscovery?.environmentId === environmentId ? vmDiscovery.error : null;
-  const refreshVirtualMachines = async (targetEnvironmentId = environmentId) => {
-    if (!virtualMachinesSupported) return;
-    const started = { environmentId: targetEnvironmentId, error: null };
-    setVmDiscovery(started);
-    const result = await listVirtualMachines({ environmentId: targetEnvironmentId, input: {} });
-    setVmDiscovery((current) =>
-      current === started
-        ? {
-            ...started,
-            error: result._tag === "Failure" ? formatEnvironmentQueryError(result.cause) : null,
-          }
-        : current,
-    );
-  };
-  const discoverVirtualMachines = useEffectEvent(refreshVirtualMachines);
-  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- discovers VM support and inventory for both onboarding and the device list
-  useEffect(() => {
-    if (props.visible && virtualMachinesSupported) {
-      // oxlint-disable-next-line react/set-state-in-effect -- Discovery synchronizes the external VM inventory and its failure feedback.
-      void discoverVirtualMachines(environmentId);
-    }
-  }, [environmentId, props.visible, virtualMachinesSupported]);
 
   useAtomMount(
     props.visible && loaded && !hostDisabled
@@ -139,6 +111,7 @@ export function DevicePanel(props: {
     : undefined;
 
   const grouped = groupDevices(state);
+  const stoppable = state.devices.filter((device) => device.booted && !device.physical);
 
   const startOperation = (pending: DeviceSummary | null) => {
     const started = { scope, pending, error: null };
@@ -174,6 +147,27 @@ export function DevicePanel(props: {
       });
       settleOperation(null);
     }
+  };
+
+  const stopDevices = async (devices: readonly DeviceSummary[]) => {
+    setStopError(undefined);
+    setStopping((current) => new Set([...current, ...devices.map(stoppingKey)]));
+    const results = await Promise.all(
+      devices.map((device) =>
+        shutdown({
+          environmentId,
+          input: { hostId: device.hostId, deviceId: device.id, platform: device.platform },
+        }).finally(() =>
+          setStopping((current) => {
+            const next = new Set(current);
+            next.delete(stoppingKey(device));
+            return next;
+          }),
+        ),
+      ),
+    );
+    const failure = results.find((result) => result._tag === "Failure");
+    if (failure?._tag === "Failure") setStopError(formatEnvironmentQueryError(failure.cause));
   };
 
   const floatActive = () => {
@@ -242,26 +236,7 @@ export function DevicePanel(props: {
       .map((platform) => ({ ...platform, hostId: host.id, hostLabel: host.label })),
   );
 
-  const surfaceGate = deviceSurfaceGate({
-    onboardingCompleted: state.onboardingCompleted,
-    hostDisabled,
-    virtualMachinesEnabled,
-  });
-  // A click can land before the first VM snapshot. Setup would stay open after that snapshot.
-  if (loaded && surfaceGate === "loading") {
-    return (
-      <PreviewPanelShell mode={props.mode}>
-        <DeviceLoadingView
-          name={gt("Devices")}
-          stage="opening"
-          message={virtualMachinesQuery.error ?? gt("Finding devices…")}
-          error={virtualMachinesQuery.error != null}
-        />
-      </PreviewPanelShell>
-    );
-  }
-  // macOS VMs need no device hub, so turning the hub off later keeps the list for them.
-  if (loaded && surfaceGate === "setup") {
+  if (loaded && (!state.onboardingCompleted || hostDisabled)) {
     return (
       <Dialog
         open={props.visible}
@@ -307,6 +282,9 @@ export function DevicePanel(props: {
           ) : null}
           {operationError ? (
             <DeviceNotice onDismiss={() => setOperation(null)}>{operationError}</DeviceNotice>
+          ) : null}
+          {stopError !== undefined ? (
+            <DeviceNotice onDismiss={() => setStopError(undefined)}>{stopError}</DeviceNotice>
           ) : null}
         </div>
         <div className="@container relative flex min-h-0 flex-1">
@@ -369,11 +347,7 @@ export function DevicePanel(props: {
                     >
                       {state.hostStatus === "failed"
                         ? (state.hostStatusDetail ?? gt("The device hub failed to start."))
-                        : hostDisabled
-                          ? gt(
-                              "Simulators and emulators are off. Turn on the device hub in Settings > Devices.",
-                            )
-                          : gt("No simulators or emulators were found on this environment.")}
+                        : gt("No simulators or emulators were found on this environment.")}
                     </p>
                   </>
                 ) : null}
@@ -386,7 +360,9 @@ export function DevicePanel(props: {
                           <h3 className="font-medium">
                             {group.platform === "ios"
                               ? gt("iOS Simulators")
-                              : gt("Android Emulators")}
+                              : group.devices.some((device) => device.physical)
+                                ? gt("Android Devices")
+                                : gt("Android Emulators")}
                           </h3>
                         </div>
                         <DiscoveryList>
@@ -406,10 +382,33 @@ export function DevicePanel(props: {
                                   {`${state.hosts.find((host) => host.id === device.hostId)?.label} · ${device.version} · ${device.booted ? gt("Running", { $context: "device state" }) : gt("Stopped", { $context: "device state" })}`}
                                 </span>
                               </div>
+                              {device.booted && !device.physical ? (
+                                <Tooltip>
+                                  <TooltipTrigger
+                                    render={
+                                      <Button
+                                        variant="outline"
+                                        size="icon-sm"
+                                        disabled={
+                                          isStopping(device) ||
+                                          pendingDeviceKey === deviceKey(device)
+                                        }
+                                        aria-label={gt("Stop {name}", { name: device.name })}
+                                        onClick={() => void stopDevices([device])}
+                                      />
+                                    }
+                                  >
+                                    {isStopping(device) ? <Spinner size="xs" /> : <Square />}
+                                  </TooltipTrigger>
+                                  <TooltipPopup>
+                                    {gt("Stop", { $context: "verb, powers off a running device" })}
+                                  </TooltipPopup>
+                                </Tooltip>
+                              ) : null}
                               <Button
                                 variant="outline"
                                 size="sm"
-                                disabled={pendingDeviceKey !== null}
+                                disabled={pendingDeviceKey !== null || isStopping(device)}
                                 aria-label={
                                   device.booted
                                     ? gt("Open {name}", { name: device.name })
@@ -446,22 +445,33 @@ export function DevicePanel(props: {
                     </T>
                   </p>
                 ) : null}
-                <VirtualMachineDeviceSection
-                  threadRef={props.threadRef}
-                  discoveryError={vmDiscoveryError}
-                />
                 {loaded && !hostBusy ? (
-                  <Button
-                    className={grouped.length > 0 ? "self-start" : "self-center"}
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      void list({ environmentId, input: {} });
-                      void refreshVirtualMachines();
-                    }}
+                  <div
+                    className={cn(
+                      "flex flex-wrap gap-2",
+                      grouped.length > 0 ? "self-start" : "self-center",
+                    )}
                   >
-                    <T>Refresh devices</T>
-                  </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void list({ environmentId, input: {} })}
+                    >
+                      <T>Refresh devices</T>
+                    </Button>
+                    {stoppable.length > 0 ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={stoppable.every(isStopping)}
+                        onClick={() =>
+                          void stopDevices(stoppable.filter((device) => !isStopping(device)))
+                        }
+                      >
+                        <T>Stop all devices</T>
+                      </Button>
+                    ) : null}
+                  </div>
                 ) : null}
               </div>
             </div>
