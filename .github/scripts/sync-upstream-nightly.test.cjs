@@ -114,7 +114,7 @@ function fixture() {
         },
         createTree: async ({ base_tree, tree }) => {
           state.calls.push(["tree", base_tree, tree]);
-          return { data: { sha: state.treeSha ?? "f".repeat(40) } };
+          return { data: { sha: state.treeShas?.shift() ?? state.treeSha ?? "f".repeat(40) } };
         },
         createCommit: async ({ message, tree, parents }) => {
           state.calls.push(["commit", message, tree, parents]);
@@ -313,6 +313,37 @@ test("commits a catalog-only conflict merged locally, and blocks when GitHub's t
       false,
     );
   }
+});
+
+test("builds a large merge tree in batches, each on top of the last", async () => {
+  // GitHub answers a single create-tree request with ~900 entries with a 502.
+  const catalog = "apps/web/src/i18n/translations/en.json";
+  const entries = Array.from({ length: 250 }, (_, i) => ({
+    path: `apps/web/src/file${i}.ts`,
+    mode: "100644",
+    type: "blob",
+    sha: "2".repeat(40),
+  }));
+  const { state, input } = fixture();
+  Object.assign(state, {
+    conflict: true,
+    conflicts: [catalog],
+    resolution: { baseTree: "1".repeat(40), tree: "f".repeat(40), files: [catalog], entries },
+    treeShas: ["3".repeat(40), "4".repeat(40), "f".repeat(40)],
+  });
+  assert.equal((await syncUpstreamNightly(input)).candidate, CANDIDATE);
+  assert.deepEqual(
+    state.calls.filter(([kind]) => kind === "tree").map(([, base, tree]) => [base, tree.length]),
+    [
+      ["1".repeat(40), 100],
+      ["3".repeat(40), 100],
+      ["4".repeat(40), 50],
+    ],
+  );
+  assert.deepEqual(
+    state.calls.filter(([kind]) => kind === "tree").flatMap(([, , tree]) => tree),
+    entries,
+  );
 });
 
 test("resolves catalog-only conflicts into the tree a full merge would build", (t) => {
