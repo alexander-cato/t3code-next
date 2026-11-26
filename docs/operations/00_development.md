@@ -151,10 +151,11 @@ review fails on added high-severity vulnerabilities, and gitleaks scans the new 
 nightly candidate, CodeQL and gitleaks also leave out the lines and commits the merged upstream
 nightly already has. Add a reviewed gitleaks false positive to `.gitleaksignore` by its fingerprint. With
 `FORK_SYNC_AUTO_MERGE` on, the nightly merger needs `Check`, `Agent context budget`, and
-`Security check` to pass on the exact candidate, plus a completed Codex code review of that
-candidate with every review thread resolved. Codex keeps reporting findings after their threads are
-resolved, so the threads decide. It ignores the Codex security review, which reports completion but
-no result.
+`Security check` to pass on the exact candidate. It does not wait for a Codex review, because
+automatic Codex reviews are off for this repository (Codex settings, not a repository file) and a
+review of a nightly is mostly about upstream code. An unresolved review thread still holds the merge
+when its file differs from the upstream nightly, so findings on fork changes and conflict
+resolutions need a fix or a written dismissal.
 Like the Security scans, the context budget on a nightly candidate counts only growth beyond what
 the upstream nightly added.
 
@@ -162,6 +163,11 @@ When the nightly merge conflicts, a required check fails, or review threads are 
 sync opens one issue assigned to the owner with the conflicting files and resolution steps, and
 closes it once the nightly PR is ready. It does not retry a known conflict until `main`, the
 nightly, or `sync/upstream-nightly` changes; push the resolution to `sync/upstream-nightly`.
+Translation catalogs are generated and grow at the end, so both sides' new keys collide on most
+nightlies. When those are the only conflicts, the sync merges them key by key and commits the merge
+itself; `node .github/scripts/catalog-merge.cjs` does the same during a manual merge.
+`pnpm-lock.yaml` can merge without a conflict and still be broken: take the nightly's lockfile and
+run `vp i`.
 
 Installed clients update from this repository's releases; the earlier `alexander-cato/t3code` fork
 is retired. This repository's inherited deployment workflows remain disabled until their

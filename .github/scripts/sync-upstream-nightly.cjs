@@ -1,4 +1,5 @@
 const { mergeReviewedNightly, requiredChecks } = require("./fork-sync-review.cjs");
+const { CATALOG, mergeCatalog } = require("./catalog-merge.cjs");
 const { execFileSync } = require("node:child_process");
 const { mkdtempSync, writeFileSync, rmSync } = require("node:fs");
 const { join } = require("node:path");
@@ -93,6 +94,113 @@ function listConflicts({ base, ours, theirs }) {
   }
 }
 
+// Builds the merge locally when every conflict is a translation catalog. GitHub's merge API takes no
+// resolution, so the result goes back through the Git Data API, which signs the commit.
+function resolveCatalogConflicts({ base, ours, theirs }) {
+  const directory = mkdtempSync(join(tmpdir(), "t3-nightly-catalogs-"));
+  try {
+    const git = (args, { input, raw = false } = {}) => {
+      const output = execFileSync("git", ["-c", "credential.helper=", ...args], {
+        encoding: raw ? "buffer" : "utf8",
+        input,
+        maxBuffer: 1 << 28,
+        stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_INDEX_FILE: join(directory, "index") },
+      });
+      return raw ? output : output.replace(/\n$/, "");
+    };
+    let merged;
+    try {
+      git([
+        "merge-tree",
+        "--write-tree",
+        "--name-only",
+        "--no-messages",
+        `--merge-base=${base}`,
+        ours,
+        theirs,
+      ]);
+      return undefined;
+    } catch (error) {
+      if (error.status !== 1) throw error;
+      merged = error.stdout.split("\n").filter(Boolean);
+    }
+    const [conflictTree, ...conflicts] = [...new Set(merged)];
+    if (!conflicts.length || !conflicts.every((file) => CATALOG.test(file))) return undefined;
+    git(["read-tree", conflictTree]);
+    for (const path of conflicts) {
+      const text = mergeCatalog(
+        ...[base, ours, theirs].map((rev) =>
+          git(["cat-file", "blob", `${rev}:${path}`], { raw: true }).toString("utf8"),
+        ),
+      );
+      if (text === undefined) return undefined;
+      const blob = git(["hash-object", "-w", "--stdin"], { input: text });
+      git(["update-index", "--cacheinfo", `100644,${blob},${path}`]);
+    }
+    const tree = git(["write-tree"]);
+    const upstream = new Map(
+      git(["ls-tree", "-r", "-z", "--full-tree", theirs])
+        .split("\0")
+        .filter(Boolean)
+        .map((line) => {
+          const [meta, path] = line.split("\t");
+          return [path, meta.split(" ")[2]];
+        }),
+    );
+    const records = git(["diff-tree", "-r", "-z", "--no-renames", ours, tree])
+      .split("\0")
+      .filter(Boolean);
+    const entries = [];
+    for (let i = 0; i < records.length; i += 2) {
+      const [oldMode, newMode, , sha, status] = records[i].slice(1).split(" ");
+      const path = records[i + 1];
+      const mode = status === "D" ? oldMode : newMode;
+      const type = mode === "160000" ? "commit" : "blob";
+      const entry = { path, mode, type, sha: status === "D" ? null : sha };
+      // GitHub already has every blob of the upstream nightly; text merges and catalogs are new.
+      if (entry.sha && type === "blob" && upstream.get(path) !== sha)
+        entry.content = git(["cat-file", "blob", sha], { raw: true }).toString("base64");
+      entries.push(entry);
+    }
+    return { baseTree: git(["rev-parse", `${ours}^{tree}`]), tree, entries, files: conflicts };
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+async function commitResolution({ github, resolution, parents, message }) {
+  for (const entry of resolution.entries.filter((item) => item.content !== undefined)) {
+    const { data } = await github.rest.git.createBlob({
+      ...REPOSITORY,
+      content: entry.content,
+      encoding: "base64",
+    });
+    if (data.sha !== entry.sha) throw new Error(`GitHub stored ${entry.path} as a different blob.`);
+  }
+  const { data: tree } = await github.rest.git.createTree({
+    ...REPOSITORY,
+    base_tree: resolution.baseTree,
+    tree: resolution.entries.map(({ path, mode, type, sha }) => ({ path, mode, type, sha })),
+  });
+  if (tree.sha !== resolution.tree)
+    throw new Error("GitHub built a different tree than the local merge.");
+  const { data: commit } = await github.rest.git.createCommit({
+    ...REPOSITORY,
+    message,
+    tree: tree.sha,
+    parents,
+  });
+  if (!SHA.test(commit.sha)) throw new Error("GitHub returned an invalid merge commit.");
+  await github.rest.git.updateRef({
+    ...REPOSITORY,
+    ref: `heads/${CANDIDATE}`,
+    sha: commit.sha,
+    force: false,
+  });
+  return commit.sha;
+}
+
 function blockedIssue(state) {
   const { tag, nightly, main, candidate, head, conflicts, pull, reason } = state;
   const resolve = conflicts
@@ -109,6 +217,8 @@ function blockedIssue(state) {
         "git fetch --no-tags origin main sync/upstream-nightly upstream/nightly",
         "git switch --detach origin/sync/upstream-nightly",
         `git merge --no-ff ${head === main ? "origin/main" : "origin/upstream/nightly"} -m "chore(sync): merge ${tag}"`,
+        "node .github/scripts/catalog-merge.cjs # merges conflicted translation catalogs key by key",
+        "# if pnpm-lock.yaml changed on both sides: git checkout origin/upstream/nightly -- pnpm-lock.yaml && vp i",
         "# resolve, check, and commit with a signature GitHub verifies",
         "git push origin HEAD:sync/upstream-nightly",
         "```",
@@ -117,7 +227,7 @@ function blockedIssue(state) {
       ]
     : [
         `Fix a failed check on ${pull} through \`sync/upstream-nightly\` or \`main\`. Fix each review`,
-        "finding or reply with why it stays, then resolve its thread. The sync merges once unblocked and",
+        "finding on a fork change or reply with why it stays, then resolve its thread. The sync merges once unblocked and",
         "closes this issue; run the sync with `retry` to re-dispatch unchanged checks.",
       ];
   return {
@@ -145,6 +255,7 @@ async function syncUpstreamNightly({
   token,
   push = pushMirror,
   conflictsOf = listConflicts,
+  resolveConflicts = resolveCatalogConflicts,
   review = mergeReviewedNightly,
   checks = requiredChecks,
 }) {
@@ -276,13 +387,19 @@ async function syncUpstreamNightly({
   for (const head of [main, sha]) {
     if ((await branch(CANDIDATE)) !== candidate)
       throw new Error("The candidate changed during sync.");
+    const message = `chore(sync): merge ${head === main ? "protected main" : nightly.tag_name}`;
+    let merged;
     try {
-      const merged = await candidateGithub.rest.repos.merge({
+      merged = await candidateGithub.rest.repos.merge({
         ...REPOSITORY,
         base: CANDIDATE,
         head,
-        commit_message: `chore(sync): merge ${head === main ? "protected main" : nightly.tag_name}`,
+        commit_message: message,
       });
+    } catch (error) {
+      if (error.status !== 409) throw error;
+    }
+    if (merged) {
       if (merged.status !== 204) {
         const result = merged.data;
         const exactParents =
@@ -296,26 +413,40 @@ async function syncUpstreamNightly({
       }
       if ((await branch(CANDIDATE)) !== candidate)
         throw new Error("The candidate changed after the merge.");
-    } catch (error) {
-      if (error.status !== 409) throw error;
-      let conflicts = [];
-      try {
-        const { data } = await github.rest.repos.compareCommitsWithBasehead({
-          ...REPOSITORY,
-          basehead: `${candidate}...${head}`,
-        });
-        conflicts = conflictsOf({
-          base: data.merge_base_commit.sha,
-          ours: candidate,
-          theirs: head,
-        });
-      } catch (listing) {
-        console.warn(`Could not list the conflicting files: ${listing.message}`);
-      }
-      const reason = `Merging ${head === main ? "main" : nightly.tag_name} into ${CANDIDATE} conflicts.`;
-      const issue = await block({ reason, head, candidate, conflicts });
-      return { changed: false, sha, reason: `${reason} Resolution needed: ${issue}` };
+      continue;
     }
+    let conflicts = [];
+    let resolved;
+    try {
+      const { data } = await github.rest.repos.compareCommitsWithBasehead({
+        ...REPOSITORY,
+        basehead: `${candidate}...${head}`,
+      });
+      const pins = { base: data.merge_base_commit.sha, ours: candidate, theirs: head };
+      conflicts = conflictsOf(pins);
+      const resolution =
+        conflicts.length && conflicts.every((file) => CATALOG.test(file))
+          ? resolveConflicts(pins)
+          : undefined;
+      if (resolution)
+        resolved = await commitResolution({
+          github: candidateGithub,
+          resolution,
+          parents: [candidate, head],
+          message: `${message}\n\nMerged translation catalogs key by key:\n${resolution.files.map((file) => `- ${file}`).join("\n")}`,
+        });
+    } catch (resolving) {
+      console.warn(`Could not resolve the conflicting files: ${resolving.message}`);
+    }
+    if (resolved) {
+      if ((await branch(CANDIDATE)) !== resolved)
+        throw new Error("The candidate changed after the catalog merge.");
+      candidate = resolved;
+      continue;
+    }
+    const reason = `Merging ${head === main ? "main" : nightly.tag_name} into ${CANDIDATE} conflicts.`;
+    const issue = await block({ reason, head, candidate, conflicts });
+    return { changed: false, sha, reason: `${reason} Resolution needed: ${issue}` };
   }
   await verified(candidate);
   if (!(await contains(main, candidate)) || !(await contains(sha, candidate))) {
@@ -364,6 +495,7 @@ async function syncUpstreamNightly({
         pullNumber: pull.number,
         head: candidate,
         base: main,
+        upstream: sha,
       })
     : await checks({ github, head: candidate }).then((status) =>
         status?.blocked
@@ -390,4 +522,10 @@ async function syncUpstreamNightly({
   return { changed: true, sha, candidate, pull: pull.html_url, review: result };
 }
 
-module.exports = { selectNightly, syncUpstreamNightly, pushMirror, listConflicts };
+module.exports = {
+  selectNightly,
+  syncUpstreamNightly,
+  pushMirror,
+  listConflicts,
+  resolveCatalogConflicts,
+};

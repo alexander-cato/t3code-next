@@ -1,30 +1,4 @@
-const BOT_ID = 199175422;
 const REPOSITORY = { owner: "alexander-cato", repo: "t3code-next" };
-
-function completedCodeReview(comments, head) {
-  const summaries = comments
-    .filter(
-      (comment) =>
-        comment.user?.id === BOT_ID &&
-        comment.user?.type === "Bot" &&
-        comment.user?.login === "chatgpt-codex-connector[bot]" &&
-        typeof comment.body === "string" &&
-        comment.body.includes("<!-- codex-review-state:v1 "),
-    )
-    .sort((a, b) => b.id - a.id);
-  const body = summaries[0]?.body;
-  if (!body || body.length > 100_000) return false;
-  const matches = [...body.matchAll(/<!-- codex-review-state:v1 ([^\n]+?) -->/g)];
-  if (matches.length !== 1 || matches[0][1].length > 16_384) return false;
-  let state;
-  try {
-    state = JSON.parse(matches[0][1]);
-  } catch {
-    return false;
-  }
-  const review = state?.code_review;
-  return review?.commit_sha === head && review.status === "completed" ? review : undefined;
-}
 
 // Returns undefined once every required check passed on the exact head.
 async function requiredChecks({ github, head }) {
@@ -47,7 +21,7 @@ async function requiredChecks({ github, head }) {
   return waiting;
 }
 
-async function mergeReviewedNightly({ github, merger, pullNumber, head, base }) {
+async function mergeReviewedNightly({ github, merger, pullNumber, head, base, upstream }) {
   const pending = (reason) => ({ merged: false, reason });
   const { data: pull } = await github.rest.pulls.get({ ...REPOSITORY, pull_number: pullNumber });
   if (
@@ -62,15 +36,9 @@ async function mergeReviewedNightly({ github, merger, pullNumber, head, base }) 
     return pending("Nightly PR is not the pinned ready candidate.");
   const checks = await requiredChecks({ github, head });
   if (checks) return { merged: false, ...checks };
-  const comments = await github.paginate(github.rest.issues.listComments, {
-    ...REPOSITORY,
-    issue_number: pullNumber,
-    per_page: 100,
-  });
-  const review = completedCodeReview(comments, head);
-  if (!review) return pending("Waiting for a completed current-head Codex code review.");
-  // Codex keeps reporting findings after their threads are resolved, so resolved threads decide.
-  let threadCount = 0;
+  // Codex review is optional, and it reviews every upstream change in the nightly. A thread holds
+  // the merge only on a file the fork carries differently from upstream.
+  const unresolved = new Set();
   let after = null;
   let done = false;
   for (let page = 0; page < 20; page++) {
@@ -78,7 +46,7 @@ async function mergeReviewedNightly({ github, merger, pullNumber, head, base }) 
       `query($owner:String!,$repo:String!,$number:Int!,$after:String) {
       repository(owner:$owner,name:$repo) { pullRequest(number:$number) {
         headRefOid baseRefOid reviewThreads(first:100,after:$after) {
-          nodes { isResolved } pageInfo { hasNextPage endCursor }
+          nodes { isResolved path } pageInfo { hasNextPage endCursor }
         }
       } }
     }`,
@@ -89,13 +57,8 @@ async function mergeReviewedNightly({ github, merger, pullNumber, head, base }) 
       return pending("PR source or base changed during review verification.");
     const threads = current.reviewThreads;
     if (!Array.isArray(threads?.nodes)) return pending("Review threads are unavailable.");
-    if (threads.nodes.some((thread) => thread?.isResolved !== true))
-      return {
-        merged: false,
-        blocked: true,
-        reason: "Review findings need a fix or a written dismissal, then a resolved thread.",
-      };
-    threadCount += threads.nodes.length;
+    for (const thread of threads.nodes)
+      if (thread?.isResolved !== true) unresolved.add(thread?.path ?? "");
     if (threads.pageInfo?.hasNextPage === false) {
       done = true;
       break;
@@ -105,33 +68,25 @@ async function mergeReviewedNightly({ github, merger, pullNumber, head, base }) 
     after = threads.pageInfo.endCursor;
   }
   if (!done) return pending("Review thread list exceeds the verification limit.");
-  // A finding on a line outside the diff lands in the review body, with no thread to resolve.
-  const reviews =
-    review.has_unresolved_findings === false
-      ? []
-      : await github.paginate(github.rest.pulls.listReviews, {
-          ...REPOSITORY,
-          pull_number: pullNumber,
-          per_page: 100,
-        });
-  for (const item of reviews) {
-    if (item.user?.id !== BOT_ID || item.commit_id !== head) continue;
-    const inline = await github.paginate(github.rest.pulls.listCommentsForReview, {
-      ...REPOSITORY,
-      pull_number: pullNumber,
-      review_id: item.id,
-      per_page: 100,
-    });
-    if (inline.length === 0)
-      return {
-        merged: false,
-        blocked: true,
-        reason:
-          "Codex left a finding outside the diff, which has no thread to resolve. Fix it on main, or merge the PR by hand after reading it.",
-      };
-  }
-  if (review.has_unresolved_findings !== false && threadCount === 0)
-    return pending("Codex reported findings without review threads to resolve.");
+  const blobAt = async (path, ref) => {
+    try {
+      const { data } = await github.rest.repos.getContent({ ...REPOSITORY, path, ref });
+      return Array.isArray(data) ? "directory" : data.sha;
+    } catch (error) {
+      if (error.status === 404) return null;
+      throw error;
+    }
+  };
+  const forkFiles = [];
+  for (const path of unresolved)
+    if (!path || (await blobAt(path, head)) !== (await blobAt(path, upstream)))
+      forkFiles.push(path || "(no file)");
+  if (forkFiles.length)
+    return {
+      merged: false,
+      blocked: true,
+      reason: `Review findings on fork changes need a fix or a written dismissal, then a resolved thread: ${forkFiles.join(", ")}.`,
+    };
   // Main requires signed commits, so GitHub refuses the merge while any new commit is unsigned.
   for (let page = 1, seen = 0; ; page++) {
     const { data } = await github.rest.repos.compareCommitsWithBasehead({
@@ -170,4 +125,4 @@ async function mergeReviewedNightly({ github, merger, pullNumber, head, base }) 
   return { merged: merged.merged === true, sha: merged.sha, reason: merged.message };
 }
 
-module.exports = { completedCodeReview, mergeReviewedNightly, requiredChecks };
+module.exports = { mergeReviewedNightly, requiredChecks };
