@@ -178,11 +178,18 @@ async function commitResolution({ github, resolution, parents, message }) {
     });
     if (data.sha !== entry.sha) throw new Error(`GitHub stored ${entry.path} as a different blob.`);
   }
-  const { data: tree } = await github.rest.git.createTree({
-    ...REPOSITORY,
-    base_tree: resolution.baseTree,
-    tree: resolution.entries.map(({ path, mode, type, sha }) => ({ path, mode, type, sha })),
-  });
+  // GitHub answers one create-tree request for a whole nightly with a 502, so each batch builds on the last.
+  const tree = { sha: resolution.baseTree };
+  for (let i = 0; i < resolution.entries.length; i += 100) {
+    const { data } = await github.rest.git.createTree({
+      ...REPOSITORY,
+      base_tree: tree.sha,
+      tree: resolution.entries
+        .slice(i, i + 100)
+        .map(({ path, mode, type, sha }) => ({ path, mode, type, sha })),
+    });
+    tree.sha = data.sha;
+  }
   if (tree.sha !== resolution.tree)
     throw new Error("GitHub built a different tree than the local merge.");
   const { data: commit } = await github.rest.git.createCommit({
