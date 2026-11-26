@@ -13,6 +13,7 @@ import {
   type VirtualMachineGuest,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
+import { splitsSurrogatePair } from "@t3tools/shared/assistantCitations";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as DeviceService from "../../../device/DeviceService.ts";
@@ -114,6 +115,9 @@ export const requireDeviceAccess = Effect.gen(function* () {
   return scope;
 });
 
+const slicePrefix = (text: string, max: number) =>
+  text.slice(0, splitsSurrogatePair(text, max) ? max - 1 : max);
+
 export const resolveHostId = Effect.fn("handlers.resolveHostId")(function* (
   hosts: ReadonlyArray<DeviceHostSummary>,
   hostId: string | undefined,
@@ -125,10 +129,10 @@ export const resolveHostId = Effect.fn("handlers.resolveHostId")(function* (
   if (labelMatches.length === 1) return labelMatches[0]!.id;
   const candidates = labelMatches.length > 1 ? labelMatches : hosts;
   const listed = [
-    ...candidates.slice(0, 10).map((host) => `${host.label.slice(0, 64)} (${host.id})`),
+    ...candidates.slice(0, 10).map((host) => `${slicePrefix(host.label, 64)} (${host.id})`),
     ...(candidates.length > 10 ? [`${candidates.length - 10} more`] : []),
   ].join(", ");
-  const selector = hostId.slice(0, 128);
+  const selector = slicePrefix(hostId, 128);
   return yield* new DeviceToolUnavailableError({
     reason:
       labelMatches.length > 1
@@ -332,7 +336,11 @@ const handlers = {
       }
       const hostId = yield* resolveHostId(state.hosts, input?.hostId);
       const open = state.sessions
-        .filter((session) => session.threadId === scope.thread.threadId)
+        .filter(
+          (session) =>
+            session.threadId === scope.thread.threadId &&
+            (hostId === undefined || session.hostId === hostId),
+        )
         .map((session) => ({ hostId: session.hostId, deviceId: session.deviceId }));
       return {
         hostStatuses: Object.fromEntries(
