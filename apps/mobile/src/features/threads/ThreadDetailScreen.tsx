@@ -148,6 +148,8 @@ import {
 import { editPendingThreadMessage } from "../../state/edit-pending-thread-message";
 import { environmentCatalog } from "../../connection/catalog";
 import { useThreadDevicePreviewCount } from "../../state/device";
+import { useVirtualMachineState } from "../../state/virtualMachines";
+import { threadDevicePreviews } from "../devices/threadDevicePreviews";
 import { ThreadBrowserFloat } from "../browser/ThreadBrowserFloat";
 import { useThreadServerBrowserTabCount } from "../../state/preview";
 import type { QueuedThreadMessage } from "../../state/thread-outbox-model";
@@ -432,10 +434,10 @@ function ThreadDetailBody(
   const openInspector = useOpenThreadInspector();
   const { session: voiceInputSession } = useGlobalVoiceInput();
   const reportedModelSelection = useThreadReportedModelSelection(props.selectedThreadDetailRef);
-  const devicePreviewCount = useThreadDevicePreviewCount(
-    props.environmentId,
-    props.selectedThread.id,
-  );
+  const virtualMachines = useVirtualMachineState(props.environmentId).data;
+  const devicePreviewCount =
+    useThreadDevicePreviewCount(props.environmentId, props.selectedThread.id) +
+    threadDevicePreviews(null, props.selectedThread.id, virtualMachines).length;
   const openDevicePreview = () => {
     Keyboard.dismiss();
     if (

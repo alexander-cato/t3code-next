@@ -27,7 +27,7 @@ New to T3 Code? Start with the **[User Guide & Index](./user/README.md)** for ho
 
 ### Providers
 
-[Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [Cursor](./user/cursor.md) · [Grok Build](./user/providers-grok.md) · [Antigravity](./user/providers-antigravity.md) · [OpenCode](./user/providers-opencode.md) · [Kiro](./user/providers-kiro.md) · [Pi](./user/providers-pi.md) · [Muse Code](./user/providers-muse.md) · [fx](./user/providers-fx.md) · [ACP providers](./user/providers-acp.md)
+[Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [Cursor](./user/cursor.md) · [Grok Build](./user/providers-grok.md) · [Antigravity](./user/providers-antigravity.md) · [OpenCode](./user/providers-opencode.md) · [Kiro](./user/providers-kiro.md) · [Devin](./user/providers-devin.md) · [Pi](./user/providers-pi.md) · [Muse Code](./user/providers-muse.md) · [fx](./user/providers-fx.md) · [ACP providers](./user/providers-acp.md)
 
 ---
 
@@ -61,6 +61,7 @@ anything.
 - [15 · Testing](./internals/15_testing.md)
 - [16 · Performance regression checks](./internals/16_performance-regressions.md)
 - [17 · Scripts](./internals/17_scripts.md)
+- [macOS virtual machines](./internals/macos-vms.md)
 
 ### Runbooks
 

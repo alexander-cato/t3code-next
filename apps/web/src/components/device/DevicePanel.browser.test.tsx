@@ -25,6 +25,10 @@ const mocks = vi.hoisted(() => ({
   shutdown: vi.fn<(request: unknown) => Promise<CommandResult>>(),
   openDevice: vi.fn(),
   closeSurface: vi.fn(),
+  virtualMachinesEnabled: false,
+  virtualMachinesAvailable: true,
+  virtualMachinesPending: false,
+  listVirtualMachines: vi.fn(),
 }));
 const phone = {
   hostId: "local",
@@ -79,17 +83,46 @@ vi.mock("~/state/device", async () => {
 });
 vi.mock("~/state/use-atom-command", () => ({
   useAtomCommand: (command: string) =>
-    command === "open"
-      ? mocks.open
-      : command === "close"
-        ? mocks.close
-        : command === "list"
-          ? mocks.list
-          : command === "shutdown"
-            ? mocks.shutdown
-            : () => Promise.resolve({ _tag: "Success", value: {} }),
+    command === "vm-list"
+      ? mocks.listVirtualMachines
+      : command === "open"
+        ? mocks.open
+        : command === "close"
+          ? mocks.close
+          : command === "list"
+            ? mocks.list
+            : command === "shutdown"
+              ? mocks.shutdown
+              : () => Promise.resolve({ _tag: "Success", value: {} }),
 }));
-vi.mock("~/state/query", () => ({ formatEnvironmentQueryError: () => "Device failed" }));
+vi.mock("~/state/query", () => ({
+  formatEnvironmentQueryError: () => "Device failed",
+  useEnvironmentQuery: () =>
+    mocks.virtualMachinesPending
+      ? { data: null, isPending: true, isSuccess: false, error: null }
+      : {
+          data: {
+            enabled: mocks.virtualMachinesEnabled,
+            available: mocks.virtualMachinesAvailable,
+          },
+          isPending: false,
+          isSuccess: true,
+          error: null,
+        },
+}));
+vi.mock("~/state/session", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/state/session")>()),
+  useEnvironmentScope: () => true,
+  readEnvironmentScope: () => true,
+}));
+vi.mock("~/state/virtualMachines", () => ({
+  useVirtualMachinesSupported: () => true,
+  virtualMachineEnvironment: { state: () => null, list: "vm-list" },
+}));
+vi.mock("~/components/vm/VirtualMachineDeviceSection", () => ({
+  VirtualMachineDeviceSection: () => <h3>macOS virtual machines</h3>,
+  VirtualMachineSetup: () => null,
+}));
 vi.mock("~/rightPanelStore", () => ({
   useRightPanelStore: {
     getState: () => ({
@@ -159,6 +192,10 @@ function setup() {
   vi.resetAllMocks();
   mocks.list.mockResolvedValue({ _tag: "Success", value: { hostId: "local", deviceId: "" } });
   currentState = deviceState;
+  mocks.virtualMachinesEnabled = false;
+  mocks.virtualMachinesAvailable = true;
+  mocks.virtualMachinesPending = false;
+  mocks.listVirtualMachines.mockResolvedValue({ _tag: "Success", value: {} });
   container = document.createElement("div");
   container.style.width = "480px";
   container.style.height = "800px";
@@ -265,6 +302,92 @@ describe("DevicePanel discovery warning", () => {
     currentState = withCause("second cause");
     await screen.rerender(devicePanel(threadA));
     await expect.element(screen.getByText(warning)).toBeVisible();
+  });
+});
+
+describe("DevicePanel macOS virtual machines", () => {
+  it("discovers VMs during VM-only onboarding and includes them in Refresh devices", async () => {
+    setup();
+    mocks.virtualMachinesEnabled = true;
+    mocks.virtualMachinesAvailable = false;
+    currentState = {
+      ...deviceState,
+      hostStatus: "disabled",
+      devices: [],
+      sessions: [],
+      onboardingCompleted: false,
+    };
+    await using screen = await render(devicePanel(threadA), { container });
+    await vi.waitFor(() => expect(mocks.listVirtualMachines).toHaveBeenCalledTimes(1));
+    mocks.virtualMachinesAvailable = true;
+    await screen.rerender(devicePanel(threadA));
+    await screen.getByRole("button", { name: "Continue", exact: true }).click();
+    await screen.getByRole("button", { name: "Continue", exact: true }).click();
+    await expect.element(screen.getByRole("button", { name: "Done", exact: true })).toBeEnabled();
+    currentState = { ...currentState, onboardingCompleted: true };
+    await screen.rerender(devicePanel(threadA));
+    await screen.getByRole("button", { name: "Refresh devices", exact: true }).click();
+    await vi.waitFor(() => expect(mocks.listVirtualMachines).toHaveBeenCalledTimes(2));
+    expect(mocks.list).toHaveBeenCalledWith({ environmentId: threadA.environmentId, input: {} });
+  });
+  it.each([true, false])(
+    "lists VMs with the device hub off only when VMs are on: %s",
+    async (virtualMachinesEnabled) => {
+      setup();
+      mocks.virtualMachinesEnabled = virtualMachinesEnabled;
+      currentState = { ...deviceState, hostStatus: "disabled", devices: [], sessions: [] };
+      await using _screen = await render(devicePanel(threadA), { container });
+      expect(container.textContent?.includes("macOS virtual machines")).toBe(
+        virtualMachinesEnabled,
+      );
+      expect(container.textContent?.includes("Simulators and emulators are off.")).toBe(
+        virtualMachinesEnabled,
+      );
+    },
+  );
+
+  it("shows the loading view for a click before the first VM snapshot", async () => {
+    setup();
+    mocks.virtualMachinesPending = true;
+    mocks.virtualMachinesEnabled = true;
+    currentState = {
+      ...deviceState,
+      hostStatus: "disabled",
+      devices: [],
+      sessions: [],
+      onboardingCompleted: true,
+    };
+    await using screen = await render(devicePanel(threadA), { container });
+    await expect.element(screen.getByText("Finding devices…")).toBeVisible();
+    expect(container.textContent?.includes("Continue")).toBe(false);
+
+    mocks.virtualMachinesPending = false;
+    await screen.rerender(devicePanel(threadA));
+    await expect
+      .element(screen.getByRole("heading", { name: "macOS virtual machines" }))
+      .toBeVisible();
+    expect(container.textContent?.includes("Continue")).toBe(false);
+  });
+
+  it("finishes setup and allows agent access with only macOS VMs", async () => {
+    setup();
+    mocks.virtualMachinesEnabled = true;
+    currentState = {
+      ...deviceState,
+      hostStatus: "disabled",
+      hostStatuses: {},
+      devices: [],
+      sessions: [],
+      onboardingCompleted: false,
+      agentAccessEnabled: false,
+    };
+    await using screen = await render(devicePanel(threadA), { container });
+    await screen.getByRole("button", { name: "Continue", exact: true }).click();
+    await screen.getByRole("button", { name: "Continue", exact: true }).click();
+    await expect
+      .element(screen.getByRole("switch", { name: "Allow agents to control devices" }))
+      .toBeEnabled();
+    await expect.element(screen.getByRole("button", { name: "Done", exact: true })).toBeEnabled();
   });
 });
 

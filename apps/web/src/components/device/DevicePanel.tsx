@@ -8,7 +8,7 @@ import type {
 import { ArrowUpRight, CircleAlert, Play, Smartphone, Square, X } from "lucide-react";
 import { useAtomMount } from "@effect/atom-react";
 import { T, useGT, Var } from "gt-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useEffectEvent, useState } from "react";
 
 import { usePreviewMiniPlayerStore } from "~/previewMiniPlayerStore";
 import {
@@ -31,8 +31,9 @@ import {
   NO_DEVICE_PROBE_ATOM,
   useDeviceState,
 } from "~/state/device";
-import { formatEnvironmentQueryError } from "~/state/query";
+import { formatEnvironmentQueryError, useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { deviceSurfaceGate, virtualMachinesEnabledSnapshot } from "./deviceSurfaceGate";
 import { DeviceLoadingView } from "./DeviceLoadingView";
 import {
   DeviceSetup,
@@ -41,6 +42,8 @@ import {
   isAndroidDiscoveryUncertain,
 } from "./DeviceSetup";
 import { DeviceWorkspace } from "./DeviceWorkspace";
+import { VirtualMachineDeviceSection } from "../vm/VirtualMachineDeviceSection";
+import { virtualMachineEnvironment, useVirtualMachinesSupported } from "~/state/virtualMachines";
 import { PreviewPanelShell, type PreviewPanelMode } from "../preview/PreviewPanelShell";
 
 const deviceKey = (device: Pick<DeviceSummary, "hostId" | "id">) =>
@@ -86,6 +89,46 @@ export function DevicePanel(props: {
   const isStopping = (device: DeviceSummary) => stopping.has(stoppingKey(device));
 
   const hostDisabled = state.hostStatus === "disabled";
+  const virtualMachinesSupported = useVirtualMachinesSupported(environmentId);
+  const virtualMachinesQuery = useEnvironmentQuery(
+    virtualMachinesSupported ? virtualMachineEnvironment.state({ environmentId, input: {} }) : null,
+  );
+  const virtualMachines = virtualMachinesQuery.data;
+  const virtualMachinesEnabled = virtualMachinesEnabledSnapshot({
+    supported: virtualMachinesSupported,
+    pending: virtualMachinesQuery.isPending,
+    enabled: virtualMachines?.enabled,
+  });
+  const listVirtualMachines = useAtomCommand(virtualMachineEnvironment.list, {
+    reportFailure: false,
+  });
+  const [vmDiscovery, setVmDiscovery] = useState<{
+    readonly environmentId: typeof environmentId;
+    readonly error: string | null;
+  } | null>(null);
+  const vmDiscoveryError = vmDiscovery?.environmentId === environmentId ? vmDiscovery.error : null;
+  const refreshVirtualMachines = async (targetEnvironmentId = environmentId) => {
+    if (!virtualMachinesSupported) return;
+    const started = { environmentId: targetEnvironmentId, error: null };
+    setVmDiscovery(started);
+    const result = await listVirtualMachines({ environmentId: targetEnvironmentId, input: {} });
+    setVmDiscovery((current) =>
+      current === started
+        ? {
+            ...started,
+            error: result._tag === "Failure" ? formatEnvironmentQueryError(result.cause) : null,
+          }
+        : current,
+    );
+  };
+  const discoverVirtualMachines = useEffectEvent(refreshVirtualMachines);
+  // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- discovers VM support and inventory for both onboarding and the device list
+  useEffect(() => {
+    if (props.visible && virtualMachinesSupported) {
+      // oxlint-disable-next-line react/set-state-in-effect -- Discovery synchronizes the external VM inventory and its failure feedback.
+      void discoverVirtualMachines(environmentId);
+    }
+  }, [environmentId, props.visible, virtualMachinesSupported]);
 
   useAtomMount(
     props.visible && loaded && !hostDisabled
@@ -236,7 +279,26 @@ export function DevicePanel(props: {
       .map((platform) => ({ ...platform, hostId: host.id, hostLabel: host.label })),
   );
 
-  if (loaded && (!state.onboardingCompleted || hostDisabled)) {
+  const surfaceGate = deviceSurfaceGate({
+    onboardingCompleted: state.onboardingCompleted,
+    hostDisabled,
+    virtualMachinesEnabled,
+  });
+  // A click can land before the first VM snapshot. Setup would stay open after that snapshot.
+  if (loaded && surfaceGate === "loading") {
+    return (
+      <PreviewPanelShell mode={props.mode}>
+        <DeviceLoadingView
+          name={gt("Devices")}
+          stage="opening"
+          message={virtualMachinesQuery.error ?? gt("Finding devices…")}
+          error={virtualMachinesQuery.error != null}
+        />
+      </PreviewPanelShell>
+    );
+  }
+  // macOS VMs need no device hub, so turning the hub off later keeps the list for them.
+  if (loaded && surfaceGate === "setup") {
     return (
       <Dialog
         open={props.visible}
@@ -347,7 +409,11 @@ export function DevicePanel(props: {
                     >
                       {state.hostStatus === "failed"
                         ? (state.hostStatusDetail ?? gt("The device hub failed to start."))
-                        : gt("No simulators or emulators were found on this environment.")}
+                        : hostDisabled
+                          ? gt(
+                              "Simulators and emulators are off. Turn on the device hub in Settings > Devices.",
+                            )
+                          : gt("No simulators or emulators were found on this environment.")}
                     </p>
                   </>
                 ) : null}
@@ -445,6 +511,10 @@ export function DevicePanel(props: {
                     </T>
                   </p>
                 ) : null}
+                <VirtualMachineDeviceSection
+                  threadRef={props.threadRef}
+                  discoveryError={vmDiscoveryError}
+                />
                 {loaded && !hostBusy ? (
                   <div
                     className={cn(
@@ -455,7 +525,10 @@ export function DevicePanel(props: {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => void list({ environmentId, input: {} })}
+                      onClick={() => {
+                        void list({ environmentId, input: {} });
+                        void refreshVirtualMachines();
+                      }}
                     >
                       <T>Refresh devices</T>
                     </Button>

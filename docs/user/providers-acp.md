@@ -13,6 +13,8 @@ T3 Code negotiates ACP v2 preview when supported and falls back to ACP v1 automa
 
 Registry agents run on your T3 Code server (including when accessed remotely) and install under `<t3-home>/tools/<agent-id>/<version>/` with SHA-256 verification when provided. T3 Code checks for Registry updates in the background and installs them on the next provider refresh. Set **Executable override** to use your own local binary instead.
 
+Enabled registry agents prepare automatically when the environment starts, including after importing settings. If a download fails, choose **Prepare agent** in the provider's settings to retry without removing its saved configuration. If an installed agent stops working, **Repair installation** downloads and installs it again.
+
 ## Sign in
 
 Open the agent's account section in **Settings → Providers** and click **Sign in** (choose an auth method if multiple are offered).
@@ -38,7 +40,7 @@ Registry agents enforce their own sandbox and approval rules (switchable via the
 - **Auto-accept edits**: Auto-approves edits inside the thread's folders; asks for everything else.
 - **Auto** and **Full access**: Approves automatically.
 
-File reads and searches never wait for approval. Devin runs commands in T3 Code terminals; other agents run their own terminals and report output/exit status.
+File reads and searches never wait for approval. A Devin instance added from the Registry runs commands in T3 Code terminals that follow the thread's permission mode; new Devin setups use the [Devin provider](./providers-devin.md). Other agents run their own terminals and report output/exit status.
 
 ## Checkpoints
 

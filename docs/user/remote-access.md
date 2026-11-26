@@ -2,6 +2,31 @@
 
 Drive T3 Code from your phone, browser (`app.t3.codes`), or another desktop app while your agents run on a host computer or server. The host must stay awake and running while you work.
 
+## Existing T3 installations in the fork
+
+In T3 Code Fork, open **Settings → Environments → Existing T3 installations**, or choose
+**Import or connect an existing T3 installation** during setup.
+
+- **Import once** makes an independent copy of projects, conversations, attachments, themes,
+  portable saved secrets, provider settings, and app preferences. Close the source app and let
+  unfinished agent work settle first. Select its T3 home or `userdata` folder, then choose
+  **Import and restart**. The fork keeps its own app identity and connection credentials.
+  Imported scheduled tasks, PR watches, and automatic thread resumes start off, including
+  per-project overrides. Turn back on the ones you want in Scheduled tasks, Settings, or the
+  thread after importing, or use Keep connected to keep them running without making a copy.
+  **Restore previous fork data** reverses an import and keeps a backup of the current data.
+- **Keep connected** uses one running environment from both apps. Create a pairing link in the
+  host's **Sharing & access** settings and use **Connect existing environment** in the other app.
+  Changes to projects, conversations, provider settings, tasks, and running agents appear in
+  both apps. The host must stay running. Remove the connection under Environments to stop
+  using shared data.
+
+The connected host runs the backend. To use the fork's backend changes in both apps, first
+import into the fork, then connect the other app to the fork's environment. Otherwise, connect
+from the fork to the existing install's environment. App preferences are copied during an
+import, and remain local afterward. Browser sign-ins, OS permissions, T3 Connect authorization,
+and saved connection credentials stay under each app's controls and may require setup again.
+
 ## T3 Connect (recommended)
 
 T3 Connect links your host to your other devices without router port-forwarding.

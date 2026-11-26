@@ -87,6 +87,7 @@ Open **Settings → Providers** (web or desktop), select the environment, and en
 | **Cursor**       | Sign in in Settings or install [Cursor CLI](https://cursor.com/cli) and run `agent login`.                               | [Cursor](./cursor.md)                     |
 | **Grok Build**   | Install [Grok Build CLI](https://x.ai/cli) and run `grok login`.                                                         | [Grok](./providers-grok.md)               |
 | **Antigravity**  | Install managed runtime and sign in with Google in Settings.                                                             | [Antigravity](./providers-antigravity.md) |
+| **Devin**        | Install [Devin CLI](https://docs.devin.ai/cli) and run `devin auth login`.                                               | [Devin](./providers-devin.md)             |
 | **OpenCode**     | Install [OpenCode](https://opencode.ai) and run `opencode auth login`.                                                   | [OpenCode](./providers-opencode.md)       |
 | **Kiro**         | Install [Kiro CLI](https://kiro.dev/docs/cli/) and run `kiro-cli login`.                                                 | [Kiro](./providers-kiro.md)               |
 | **Pi**           | Install [Pi](./providers-pi.md) (Node.js 22.19+) and run `pi` → `/login`.                                                | [Pi](./providers-pi.md)                   |
@@ -114,6 +115,7 @@ T3CODE_CODEX_PROBE_TIMEOUT_MS=60000 T3CODE_CLAUDE_PROBE_TIMEOUT_MS=60000 t3 serv
 | Antigravity  | `T3CODE_ANTIGRAVITY_PROBE_TIMEOUT_MS`  |
 | Grok         | `T3CODE_GROK_PROBE_TIMEOUT_MS`         |
 | Kiro         | `T3CODE_KIRO_PROBE_TIMEOUT_MS`         |
+| Devin        | `T3CODE_DEVIN_PROBE_TIMEOUT_MS`        |
 | fx           | `T3CODE_FX_PROBE_TIMEOUT_MS`           |
 | Pi           | `T3CODE_PI_PROBE_TIMEOUT_MS`           |
 | Muse Code    | `T3CODE_MUSE_PROBE_TIMEOUT_MS`         |

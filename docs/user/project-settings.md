@@ -22,6 +22,7 @@ Use the **"Applying settings for …"** selector at the top of Settings (web/des
 
 - **Icons**: In **Settings → Projects**, set an icon, emoji, monogram, or image (applies across checkouts). Without one, T3 Code generates a two-character monogram (or single CJK character) from the project name.
 - **Multiple repositories**: See [Projects with several repositories](./multi-repo-projects.md).
+- **Auto-create scripts**: When a checkout has no actions, choose **Auto-create scripts** in its project settings or thread details (mobile: the thread's Terminal menu). T3 Code adds common `package.json` scripts and build and test commands for Cargo, Go, and Swift packages.
 
 ## Worktree settings
 
