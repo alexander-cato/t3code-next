@@ -170,41 +170,49 @@ function resolveCatalogConflicts({ base, ours, theirs }) {
 }
 
 async function commitResolution({ github, resolution, parents, message }) {
-  for (const entry of resolution.entries.filter((item) => item.content !== undefined)) {
-    const { data } = await github.rest.git.createBlob({
-      ...REPOSITORY,
-      content: entry.content,
-      encoding: "base64",
+  // Octokit reports a dropped connection only as "fetch failed", so name the request that failed.
+  const step = (label, request) =>
+    request.catch((error) => {
+      throw new Error(`${label}: ${error.message}`, { cause: error });
     });
+  for (const entry of resolution.entries.filter((item) => item.content !== undefined)) {
+    const { data } = await step(
+      `Uploading ${entry.path}`,
+      github.rest.git.createBlob({ ...REPOSITORY, content: entry.content, encoding: "base64" }),
+    );
     if (data.sha !== entry.sha) throw new Error(`GitHub stored ${entry.path} as a different blob.`);
   }
   // GitHub answers one create-tree request for a whole nightly with a 502, so each batch builds on the last.
   const tree = { sha: resolution.baseTree };
   for (let i = 0; i < resolution.entries.length; i += 100) {
-    const { data } = await github.rest.git.createTree({
-      ...REPOSITORY,
-      base_tree: tree.sha,
-      tree: resolution.entries
-        .slice(i, i + 100)
-        .map(({ path, mode, type, sha }) => ({ path, mode, type, sha })),
-    });
+    const { data } = await step(
+      `Building tree entries ${i + 1}-${Math.min(i + 100, resolution.entries.length)}`,
+      github.rest.git.createTree({
+        ...REPOSITORY,
+        base_tree: tree.sha,
+        tree: resolution.entries
+          .slice(i, i + 100)
+          .map(({ path, mode, type, sha }) => ({ path, mode, type, sha })),
+      }),
+    );
     tree.sha = data.sha;
   }
   if (tree.sha !== resolution.tree)
     throw new Error("GitHub built a different tree than the local merge.");
-  const { data: commit } = await github.rest.git.createCommit({
-    ...REPOSITORY,
-    message,
-    tree: tree.sha,
-    parents,
-  });
+  const { data: commit } = await step(
+    "Creating the merge commit",
+    github.rest.git.createCommit({ ...REPOSITORY, message, tree: tree.sha, parents }),
+  );
   if (!SHA.test(commit.sha)) throw new Error("GitHub returned an invalid merge commit.");
-  await github.rest.git.updateRef({
-    ...REPOSITORY,
-    ref: `heads/${CANDIDATE}`,
-    sha: commit.sha,
-    force: false,
-  });
+  await step(
+    `Moving ${CANDIDATE}`,
+    github.rest.git.updateRef({
+      ...REPOSITORY,
+      ref: `heads/${CANDIDATE}`,
+      sha: commit.sha,
+      force: false,
+    }),
+  );
   return commit.sha;
 }
 

@@ -110,6 +110,7 @@ function fixture() {
         },
         createBlob: async ({ content }) => {
           state.calls.push(["blob", content]);
+          if (state.blobError) throw state.blobError;
           return { data: { sha: state.blobSha ?? "e".repeat(40) } };
         },
         createTree: async ({ base_tree, tree }) => {
@@ -313,6 +314,31 @@ test("commits a catalog-only conflict merged locally, and blocks when GitHub's t
       false,
     );
   }
+});
+
+test("names the catalog merge request that failed", async (t) => {
+  // The Octokit in github-script reports a dropped connection as a bare "fetch failed".
+  const catalog = "apps/web/src/i18n/translations/en.json";
+  const { state, input } = fixture();
+  Object.assign(state, {
+    conflict: true,
+    conflicts: [catalog],
+    resolution: {
+      baseTree: "1".repeat(40),
+      tree: "f".repeat(40),
+      files: [catalog],
+      entries: [
+        { path: catalog, mode: "100644", type: "blob", sha: "e".repeat(40), content: "e30K" },
+      ],
+    },
+    blobError: Object.assign(new Error("fetch failed"), { status: 500 }),
+  });
+  const warn = t.mock.method(console, "warn", () => {});
+  assert.match((await syncUpstreamNightly(input)).reason, /Resolution needed: #100/);
+  assert.equal(
+    warn.mock.calls[0].arguments[0],
+    `Could not resolve the conflicting files: Uploading ${catalog}: fetch failed`,
+  );
 });
 
 test("builds a large merge tree in batches, each on top of the last", async () => {

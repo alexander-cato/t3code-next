@@ -64,6 +64,9 @@ jobs:
           CI_TOKEN: ${{ github.token }}
         with:
           github-token: ${{ steps.sync_app.outputs.token }}
+          # Uploading a merge drops requests now and then; a conflicting merge (409) is an answer.
+          retries: 3
+          retry-exempt-status-codes: 400,401,403,404,409,422
           script: |
             const { syncUpstreamNightly } = require('./.github/scripts/sync-upstream-nightly.cjs');
             const control = new github.constructor({ auth: process.env.CI_TOKEN });
