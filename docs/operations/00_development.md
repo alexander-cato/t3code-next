@@ -139,9 +139,11 @@ git push --set-upstream origin HEAD
 gh pr create --repo alexander-cato/t3code-next --base main --head "$fork_work_branch"
 ```
 
-Merge through GitHub after passing checks and review. `main` requires signed commits and resolved
-review conversations; its protections also apply to administrators. GitHub-signed merge commits
-preserve the upstream ancestry. The required CI and context-budget checks must come from GitHub
+Merge through GitHub after passing checks and review. `main` requires resolved review
+conversations, and its protections also apply to administrators. A repository ruleset requires
+signed commits on `main`. GitHub-signed merge commits preserve the upstream ancestry. Upstream's
+release bot does not sign its commits, so the ruleset lets only the nightly sync App bypass it, and
+the sync merges unsigned commits only when the upstream nightly already has them. The required CI and context-budget checks must come from GitHub
 Actions. Release credentials belong only in the `fork-release` environment, restricted to `main`.
 
 The [Security workflow](../../.github/workflows/security.yml) runs on PRs to `main`, on pushes to
