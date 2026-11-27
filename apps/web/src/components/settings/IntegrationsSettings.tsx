@@ -1,3 +1,4 @@
+import { useAtomValue } from "@effect/atom-react";
 import { managedCapabilityDenial } from "@t3tools/client-runtime/contract-labels";
 import { DeviceHostUpdates } from "../device/DeviceHostUpdates";
 import { DeviceToolVersions } from "../device/DeviceToolVersions";
@@ -53,7 +54,8 @@ import { useEnvironments, usePrimaryEnvironment } from "~/state/environments";
 import { deviceEnvironment, useDeviceState } from "~/state/device";
 import { readEnvironmentScope, useEnvironmentScope } from "~/state/session";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { formatEnvironmentQueryError } from "~/state/query";
+import { formatEnvironmentQueryError, useEnvironmentQuery } from "~/state/query";
+import { virtualMachineEnvironment, useVirtualMachinesSupported } from "~/state/virtualMachines";
 import { previewEnvironment } from "~/state/preview";
 import { useServerConfigs } from "~/state/entities";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -874,7 +876,6 @@ export function PullRequestLinksOpenInAppSetting() {
 }
 
 function DeviceIntegrationSettings() {
-  const gt = useGT();
   const { search, environment: selected } = useSettingsScope();
   const settings = useScopedSettings();
   const connected = selected?.connection.phase === "connected" && selected.serverConfig !== null;
@@ -884,14 +885,12 @@ function DeviceIntegrationSettings() {
 
   return (
     <>
-      <SettingsSection id="devices" title={gt("Devices")}>
-        <DeviceIntegrationControls
-          key={`${environmentId}:${JSON.stringify(search)}`}
-          environmentId={environmentId}
-          enabled={settings.enableDeviceSupport}
-          agentAccessEnabled={settings.enableAgentDeviceAccess}
-        />
-      </SettingsSection>
+      <DeviceIntegrationControls
+        key={`${environmentId}:${JSON.stringify(search)}`}
+        environmentId={environmentId}
+        enabled={settings.enableDeviceSupport}
+        agentAccessEnabled={settings.enableAgentDeviceAccess}
+      />
       <DeviceSourcesSettings
         supportsEas={state.supportsEasHosts === true}
         supportsSimlock={state.supportsSimlockHosts === true}
@@ -919,6 +918,14 @@ function DeviceIntegrationControls({
   const anyHubEnabled = connectedEnvironments.some(
     (environment) => environment.serverConfig?.settings.enableDeviceSupport,
   );
+  // macOS VMs need no device hub, so agents can use devices when either one is on.
+  const virtualMachinesSupported = useVirtualMachinesSupported(environmentId);
+  const virtualMachinesEnabled =
+    useEnvironmentQuery(
+      virtualMachinesSupported && environmentId
+        ? virtualMachineEnvironment.state({ environmentId, input: {} })
+        : null,
+    ).data?.enabled === true;
   const configure = useAtomCommand(deviceEnvironment.configure, { reportFailure: false });
   const list = useAtomCommand(deviceEnvironment.list, { reportFailure: false });
   const [pending, setPending] = useState<
@@ -1019,88 +1026,200 @@ function DeviceIntegrationControls({
 
   return (
     <>
-      <SettingsRow
-        {...searchableSetting("device-hub")}
-        serverScoped
-        settingKeys={["enableDeviceSupport"]}
-        description={
-          <T>
-            Open simulators and emulators in the Device panel. Hub:{" "}
-            <DeviceToolVersions
-              action={versionActions("hub")}
-              kind="hub"
-              tools={state.hosts.find((host) => host.kind === "local")?.tools}
-            />
-          </T>
-        }
-        control={
-          <>
-            {pending === "hub" ? <DeviceHubSetupStatus state={state} pending compact /> : null}
-            <ScopedSwitch
-              settingKeys={["enableDeviceSupport"]}
-              checked={enabled}
-              disabled={
-                !canConfigure ||
-                projectScope ||
-                !loaded ||
-                !environmentId ||
-                busy ||
-                pending !== null
-              }
-              aria-label={gt("Device hub")}
-              onCheckedChange={(checked) =>
-                void update("hub", {
-                  enabled: Boolean(checked),
-                  ...(checked ? {} : { agentAccessEnabled: false }),
-                })
-              }
-            />
-          </>
-        }
-      />
-      <SettingsRow
-        {...searchableSetting("agent-device-access")}
-        serverScoped
-        settingKeys={["enableAgentDeviceAccess"]}
-        description={
-          <T>
-            New agent sessions can open and drive these devices. agent-device:{" "}
-            <DeviceToolVersions
-              action={versionActions("agent")}
-              kind="agent"
-              tools={state.hosts.find((host) => host.kind === "local")?.tools}
-            />
-          </T>
-        }
-        control={
-          <>
-            {pending === "agent" ? <AgentDeviceSetupStatus state={state} pending compact /> : null}
-            <ScopedSwitch
-              settingKeys={["enableAgentDeviceAccess"]}
-              checked={agentAccessEnabled}
-              disabled={
-                !canConfigure ||
-                connectedEnvironments.length === 0 ||
-                (!projectScope && (!loaded || !anyHubEnabled || busy)) ||
-                pending !== null
-              }
-              aria-label={gt("Agent device access")}
-              onCheckedChange={(checked) =>
-                projectScope
-                  ? updateSettings({ enableAgentDeviceAccess: Boolean(checked) })
-                  : void update("agent", { agentAccessEnabled: Boolean(checked) })
-              }
-            />
-          </>
-        }
-      />
-      {environmentId ? (
-        <DeviceHostUpdates
-          state={{ ...state, hosts: state.hosts.filter((host) => host.kind === "local") }}
-          environmentId={environmentId}
+      <SettingsSection id="devices" title={gt("Devices")}>
+        <SettingsRow
+          {...searchableSetting("device-hub")}
+          serverScoped
+          settingKeys={["enableDeviceSupport"]}
+          description={gt("Open iOS simulators and Android emulators in the Device panel.")}
+          status={
+            <T>
+              Device hub:{" "}
+              <DeviceToolVersions action={versionActions("hub")} kind="hub" tools={localTools} />
+            </T>
+          }
+          control={
+            <>
+              {pending === "hub" ? <DeviceHubSetupStatus state={state} pending compact /> : null}
+              <ScopedSwitch
+                settingKeys={["enableDeviceSupport"]}
+                checked={enabled}
+                disabled={
+                  !canConfigure ||
+                  projectScope ||
+                  !loaded ||
+                  !environmentId ||
+                  busy ||
+                  pending !== null
+                }
+                aria-label={gt("Device hub")}
+                onCheckedChange={(checked) =>
+                  void update("hub", {
+                    enabled: Boolean(checked),
+                    ...(checked || virtualMachinesEnabled ? {} : { agentAccessEnabled: false }),
+                  })
+                }
+              />
+            </>
+          }
         />
-      ) : null}
+        {environmentId ? (
+          <DeviceHostUpdates
+            state={{ ...state, hosts: state.hosts.filter((host) => host.kind === "local") }}
+            environmentId={environmentId}
+          />
+        ) : null}
+        <VirtualMachineAccessSetting />
+      </SettingsSection>
+      <SettingsSection id="device-agents" title={gt("Agents")}>
+        <SettingsRow
+          {...searchableSetting("agent-device-access")}
+          serverScoped
+          settingKeys={["enableAgentDeviceAccess"]}
+          description={gt("New agent sessions can open and drive the devices turned on above.")}
+          status={
+            <T>
+              agent-device:{" "}
+              <DeviceToolVersions
+                action={versionActions("agent")}
+                kind="agent"
+                tools={localTools}
+              />
+            </T>
+          }
+          control={
+            <>
+              {pending === "agent" ? (
+                <AgentDeviceSetupStatus state={state} pending compact />
+              ) : null}
+              <ScopedSwitch
+                settingKeys={["enableAgentDeviceAccess"]}
+                checked={agentAccessEnabled}
+                disabled={
+                  !canConfigure ||
+                  connectedEnvironments.length === 0 ||
+                  (!projectScope &&
+                    (!loaded || (!anyHubEnabled && !virtualMachinesEnabled) || busy)) ||
+                  pending !== null
+                }
+                aria-label={gt("Agent device access")}
+                onCheckedChange={(checked) =>
+                  projectScope
+                    ? updateSettings({ enableAgentDeviceAccess: Boolean(checked) })
+                    : void update("agent", { agentAccessEnabled: Boolean(checked) })
+                }
+              />
+            </>
+          }
+        />
+      </SettingsSection>
     </>
+  );
+}
+
+function VirtualMachineAccessSetting() {
+  const gt = useGT();
+  const searchableSetting = useSearchableSetting();
+  const { environment, environments } = useSettingsScope();
+  const environmentId =
+    environments.length === 1 && environment?.connection.phase === "connected"
+      ? environment.environmentId
+      : null;
+  const supported = useVirtualMachinesSupported(environmentId);
+  const query = useEnvironmentQuery(
+    supported && environmentId
+      ? virtualMachineEnvironment.state({ environmentId, input: {} })
+      : null,
+  );
+  const canConfigure = useAtomValue(
+    virtualMachineEnvironment.configure.permissionAtom(environmentId),
+  );
+  const configure = useAtomCommand(virtualMachineEnvironment.configure, {
+    reportFailure: false,
+  });
+  const [pending, setPending] = useState(false);
+  const state = query.data;
+  const creating = state?.operations.some((operation) => operation.status === "creating") ?? false;
+  const disabled = !supported || !canConfigure || state === null || pending || creating;
+
+  const setEnabled = async (enabled: boolean) => {
+    if (!environmentId || disabled) return;
+    setPending(true);
+    const result = await configure({ environmentId, input: { enabled } }).finally(() =>
+      setPending(false),
+    );
+    if (result._tag === "Failure") {
+      toastManager.add({
+        type: "error",
+        title: gt("Could not change virtual machine access"),
+        description: formatEnvironmentQueryError(result.cause),
+      });
+    }
+  };
+
+  return (
+    <SettingsRow
+      serverScoped
+      {...searchableSetting("virtual-machine-access")}
+      description={gt(
+        "Run local macOS VMs on this environment through Lume and Cua. Agents control them when they can use devices. Turning this off closes VM views without deleting disks or stopping running VMs.",
+      )}
+      control={
+        <Switch
+          aria-label={gt("Virtual machine access")}
+          checked={state?.enabled ?? false}
+          disabled={disabled}
+          onCheckedChange={(enabled) => void setEnabled(enabled)}
+        />
+      }
+    >
+      {environments.length !== 1 ? (
+        <p className="text-sm text-muted-foreground">
+          <T>Select one environment to change virtual machine access.</T>
+        </p>
+      ) : !environmentId ? (
+        <p className="text-sm text-muted-foreground">
+          <T>Reconnect the selected environment to change virtual machine access.</T>
+        </p>
+      ) : !supported ? (
+        <p className="text-sm text-muted-foreground">
+          <T>Update this environment's T3 Code server to use virtual machines.</T>
+        </p>
+      ) : query.error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {query.error}
+        </p>
+      ) : state === null ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          <T>Loading virtual machine access…</T>
+        </p>
+      ) : pending ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          <T>Updating virtual machine access…</T>
+        </p>
+      ) : state?.unavailableReason ? (
+        <p className="text-sm text-muted-foreground">
+          {state.unavailableReason}{" "}
+          <a
+            href="https://cua.ai/docs/lume/quickstart"
+            target="_blank"
+            rel="noreferrer"
+            className="underline underline-offset-4"
+          >
+            <T>Setup guide</T>
+          </a>
+        </p>
+      ) : creating ? (
+        <p role="status" className="text-sm text-muted-foreground">
+          <T>Wait for virtual machine creation to finish before changing access.</T>
+        </p>
+      ) : null}
+      {environmentId && supported && !canConfigure ? (
+        <p className="text-sm text-muted-foreground">
+          <T>This connection does not have permission to change virtual machine access.</T>
+        </p>
+      ) : null}
+    </SettingsRow>
   );
 }
 
@@ -1148,23 +1267,28 @@ function AgentBrowserAccessSetting() {
   );
 }
 
-function BrowserAutoShowFloatingPreviewSetting({ disabled }: { readonly disabled: boolean }) {
+const AGENT_PREVIEW_TARGET_LABELS = {
+  floating: msg("Floating preview"),
+  panel: msg("Right panel"),
+} as const;
+
+function BrowserAutoShowFloatingPreviewSetting() {
   const searchableSetting = useSearchableSetting();
   const gt = useGT();
+  const m = useMessages();
   const autoShow = useClientSettings((settings) => settings.browserAutoShowFloatingPreview);
   const updateSettings = useUpdateScopedSettings();
+  const target = autoShow ? "floating" : "panel";
 
   return (
     <SettingsRow
       {...searchableSetting("browser-auto-show-floating-preview")}
       devicePreference
-      description={gt(
-        "Show the floating preview when an agent opens a browser or device unless the agent says otherwise, and when you close the right panel.",
-      )}
+      description={gt("Where a browser, device, or VM opens when an agent shows it.")}
       resetAction={
-        !disabled && autoShow !== DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW ? (
+        autoShow !== DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW ? (
           <SettingResetButton
-            ariaLabel={gt("Reset auto-show floating preview to default")}
+            ariaLabel={gt("Reset agent preview location to default")}
             onClick={() =>
               updateSettings({
                 browserAutoShowFloatingPreview: DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW,
@@ -1174,14 +1298,29 @@ function BrowserAutoShowFloatingPreviewSetting({ disabled }: { readonly disabled
         ) : null
       }
       control={
-        <Switch
-          disabled={disabled}
-          checked={autoShow}
-          onCheckedChange={(checked) =>
-            updateSettings({ browserAutoShowFloatingPreview: Boolean(checked) })
-          }
-          aria-label={gt("Auto-show floating preview")}
-        />
+        <Select
+          value={target}
+          onValueChange={(value) => {
+            if (value === "floating" || value === "panel") {
+              updateSettings({ browserAutoShowFloatingPreview: value === "floating" });
+            }
+          }}
+        >
+          <SelectTrigger
+            size="sm"
+            className="w-full sm:w-40"
+            aria-label={gt("Open agent previews in")}
+          >
+            <SelectValue>{m(AGENT_PREVIEW_TARGET_LABELS[target])}</SelectValue>
+          </SelectTrigger>
+          <SelectPopup align="end" alignItemWithTrigger={false}>
+            {(["floating", "panel"] as const).map((value) => (
+              <SelectItem hideIndicator key={value} value={value}>
+                {m(AGENT_PREVIEW_TARGET_LABELS[value])}
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
       }
     />
   );
@@ -1707,8 +1846,8 @@ export function BrowserSettingsPanel() {
         <SettingsUnavailableGroup message={desktopOnlyMessage}>
           <BrowserProfilesSetting disabled={desktopOnly} />
           <BrowserLinkTargetSetting disabled={desktopOnly} />
-          <BrowserAutoShowFloatingPreviewSetting disabled={desktopOnly} />
         </SettingsUnavailableGroup>
+        <BrowserAutoShowFloatingPreviewSetting />
         {/* Not desktop-only: web clients search from server-run browser tabs too. */}
         <BrowserSearchEngineSetting />
         <AdvancedSettings

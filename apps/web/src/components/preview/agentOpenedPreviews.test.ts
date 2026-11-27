@@ -4,6 +4,7 @@ import {
   type EnvironmentId,
   type PreviewSessionSnapshot,
   ThreadId,
+  type VirtualMachineState,
 } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -22,6 +23,7 @@ import {
 import { useRightPanelStore } from "../../rightPanelStore";
 import {
   applyDeviceSnapshot,
+  applyVirtualMachineSnapshot,
   floatBrowserSurface,
   floatDeviceSurface,
   floatPanelSurfaceOnClose,
@@ -173,6 +175,74 @@ describe("applyDeviceSnapshot", () => {
   });
 });
 
+describe("applyVirtualMachineSnapshot", () => {
+  const vmSession = { name: "mac-one", threadId: ref.threadId };
+  const vmState = (input: {
+    readonly enabled?: boolean;
+    readonly sessions?: ReadonlyArray<typeof vmSession>;
+  }): VirtualMachineState => ({
+    enabled: input.enabled ?? true,
+    available: true,
+    unavailableReason: null,
+    machines: [],
+    sessions: input.sessions ?? [],
+    operations: [],
+  });
+  const vmTabs = () =>
+    useRightPanelStore
+      .getState()
+      .byThreadKey[threadKey]?.surfaces.filter((surface) => surface.kind === "device");
+
+  it("floats VMs opened after the baseline, or opens a tab when floating previews are off", () => {
+    setup();
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({ sessions: [vmSession] }), floating);
+    expect(miniPlayerSource()).toBeUndefined();
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({}), floating);
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({ sessions: [vmSession] }), floating);
+    expect(miniPlayerSource()).toEqual({ kind: "vm", name: "mac-one" });
+
+    setup();
+    const panel = { sheetLayout: false, autoShowFloatingPreview: false };
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({}), panel);
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({ sessions: [vmSession] }), panel);
+    expect(vmTabs()).toEqual([
+      { id: "device:@vm:mac-one", kind: "device", virtualMachine: "mac-one" },
+    ]);
+    expect(miniPlayerSource()).toBeUndefined();
+  });
+
+  it("leaves a VM that already has a tab alone, as when its session arrives after the open", () => {
+    setup();
+    useRightPanelStore.getState().openVirtualMachine(ref, "mac-one");
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({}), floating);
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({ sessions: [vmSession] }), floating);
+    expect(miniPlayerSource()).toBeUndefined();
+    expect(vmTabs()).toHaveLength(1);
+  });
+
+  it("closes floating VMs and returns tabs when VMs turn off, ignoring late sessions", () => {
+    setup();
+    useRightPanelStore.getState().openVirtualMachine(ref, "mac-two");
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({ sessions: [vmSession] }), floating);
+    usePreviewMiniPlayerStore.getState().open(ref, { kind: "vm", name: "mac-one" });
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({ sessions: [vmSession] }), floating);
+    expect(miniPlayerSource()).toEqual({ kind: "vm", name: "mac-one" });
+
+    applyVirtualMachineSnapshot(
+      ref.environmentId,
+      vmState({ enabled: false, sessions: [vmSession, { ...vmSession, name: "mac-three" }] }),
+      floating,
+    );
+    expect(miniPlayerSource()).toBeUndefined();
+    expect(vmTabs()).toEqual([{ id: "device", kind: "device" }]);
+
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({ sessions: [] }), floating);
+    usePreviewMiniPlayerStore.getState().open(ref, { kind: "vm", name: "mac-one" });
+    applyVirtualMachineSnapshot(ref.environmentId, vmState({ sessions: [] }), floating);
+    expect(miniPlayerSource()).toBeUndefined();
+  });
+});
+
 describe("floatDeviceSurface", () => {
   const source = {
     kind: "device",
@@ -297,12 +367,25 @@ describe("revealServerTabs", () => {
     return source?.kind === "browser" ? source.tabId : null;
   };
 
-  it("floats revealed tabs, and only forced ones when floating previews are off", () => {
+  it("floats revealed tabs, or opens them as panel tabs when floating previews are off", () => {
     setup();
-    revealServerTabs(ref, [tab("tab_plain")], { autoShowFloatingPreview: false });
+    revealServerTabs(ref, [tab("tab_plain")], { autoShowFloatingPreview: true });
+    expect(floatingTabId()).toBe("tab_plain");
+
+    setup();
+    const userActionRevision = useRightPanelStore.getState().getUserActionRevision(ref);
+    revealServerTabs(ref, [tab("tab_plain"), tab("tab_forced", true)], {
+      autoShowFloatingPreview: false,
+    });
     expect(floatingTabId()).toBeNull();
-    revealServerTabs(ref, [tab("tab_forced", true)], { autoShowFloatingPreview: false });
-    expect(floatingTabId()).toBe("tab_forced");
+    const panel = useRightPanelStore.getState().byThreadKey[threadKey];
+    expect(panel?.isOpen).toBe(true);
+    expect(panel?.surfaces.map((surface) => surface.id)).toEqual([
+      "browser:tab_plain",
+      "browser:tab_forced",
+    ]);
+    expect(panel?.activeSurfaceId).toBe("browser:tab_forced");
+    expect(useRightPanelStore.getState().getUserActionRevision(ref)).toBe(userActionRevision);
   });
 
   it("focuses a tab already in the panel instead of floating it when forced", () => {

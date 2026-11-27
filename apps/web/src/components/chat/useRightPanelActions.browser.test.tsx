@@ -86,7 +86,6 @@ function Harness() {
     gitCwd: null,
     activeProjectCwd: null,
     onDiffPanelOpen: undefined,
-    closeRightPanelSurface: () => undefined,
   });
   return <button onClick={addDeviceSurfaceStable}>Devices</button>;
 }

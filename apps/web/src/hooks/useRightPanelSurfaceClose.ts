@@ -22,6 +22,7 @@ import {
   type RightPanelSurface,
 } from "../rightPanelStore";
 import { readThreadShell, waitForThreadShellRemoval } from "../state/entities";
+import { virtualMachineEnvironment } from "../state/virtualMachines";
 import { previewEnvironment } from "../state/preview";
 import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
 import { threadEnvironment } from "../state/threads";
@@ -40,6 +41,7 @@ export function useRightPanelSurfaceClose(input: {
   const { threadRef, terminalLabelsById } = input;
   const closePreview = useAtomCommand(previewEnvironment.close, "preview close");
   const deleteThread = useAtomCommand(threadEnvironment.delete, "side chat delete");
+  const closeVm = useAtomCommand(virtualMachineEnvironment.close, "virtual machine close");
   const canOperatePreview = useEnvironmentScope(
     threadRef?.environmentId ?? null,
     AuthPreviewOperateScope,
@@ -59,6 +61,17 @@ export function useRightPanelSurfaceClose(input: {
         snapshot: previewState.sessions[surface.resourceId] ?? null,
         tabId: surface.resourceId,
         threadRef: ref,
+      });
+    }
+    // Closing a VM's tab ends this thread's control of it; the VM keeps running.
+    if (
+      surface.kind === "device" &&
+      surface.virtualMachine !== undefined &&
+      readEnvironmentScope(ref.environmentId, AuthOrchestrationOperateScope)
+    ) {
+      void closeVm({
+        environmentId: ref.environmentId,
+        input: { threadId: ref.threadId, name: surface.virtualMachine },
       });
     }
     if (
