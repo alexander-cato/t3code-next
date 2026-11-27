@@ -20,6 +20,7 @@ import {
   usePreviewMiniPlayerStore,
 } from "../../previewMiniPlayerStore";
 import {
+  previewNavStatus,
   previewStateAtom,
   previewThreadRefsAtom,
   type ThreadPreviewState,
@@ -272,6 +273,35 @@ export function applyVirtualMachineSnapshot(
     if (options.autoShowFloatingPreview)
       usePreviewMiniPlayerStore.getState().open(threadRef, { kind: "vm", name: session.name });
     else useRightPanelStore.getState().openVirtualMachine(threadRef, session.name, true);
+  }
+}
+
+/** Floats a browser panel tab over chat, unless it never navigated. */
+export function floatBrowserSurface(
+  threadRef: ScopedThreadRef,
+  tabId: string,
+  state: ThreadPreviewState,
+): void {
+  const snapshot = state.sessions[tabId] ?? null;
+  if (previewNavStatus(snapshot, state.desktopByTabId[tabId] ?? null)._tag === "Idle") return;
+  usePreviewMiniPlayerStore.getState().open(threadRef, browserMiniPlayerSource(tabId));
+}
+
+/** Floats a panel's browser or device as the panel closes, when Auto-show floating preview is on. */
+export function floatPanelSurfaceOnClose(
+  threadRef: ScopedThreadRef,
+  source: PreviewMiniPlayerSource,
+  options: {
+    readonly autoShowFloatingPreview: boolean;
+    readonly previewState: ThreadPreviewState;
+    readonly deviceState: DeviceServiceState | null;
+  },
+): void {
+  if (!options.autoShowFloatingPreview) return;
+  if (source.kind === "browser") {
+    floatBrowserSurface(threadRef, source.tabId, options.previewState);
+  } else if (source.kind === "device") {
+    floatDeviceSurface(threadRef, source, options.deviceState);
   }
 }
 
