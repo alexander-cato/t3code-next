@@ -9,7 +9,6 @@ import type {
   PreviewSessionSnapshot,
   ScopedThreadRef,
   ThreadId,
-  VirtualMachineState,
 } from "@t3tools/contracts";
 import { AsyncResult } from "effect/reactivity";
 
@@ -20,6 +19,7 @@ import {
   usePreviewMiniPlayerStore,
 } from "../../previewMiniPlayerStore";
 import {
+  previewNavStatus,
   previewStateAtom,
   previewThreadRefsAtom,
   type ThreadPreviewState,
@@ -30,14 +30,10 @@ import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { deviceEnvironment } from "../../state/device";
 import { readEnvironmentSupportsServerBrowser } from "../../state/entities";
 import { environmentSummaries } from "../../state/presentation";
-import { environmentServerConfigsAtom } from "../../state/server";
-import { virtualMachineEnvironment } from "../../state/virtualMachines";
-import { isVirtualMachineOpeningLocally } from "../vm/virtualMachinePanelSession";
 
 /**
  * Shows browsers an agent or another client revealed for a thread: floating
- * over chat, focusing an existing panel tab when the reveal is forced, or as
- * a panel tab when floating previews are off.
+ * over chat, or focusing an existing panel tab when the reveal is forced.
  */
 export function revealServerTabs(
   threadRef: ScopedThreadRef,
@@ -46,11 +42,8 @@ export function revealServerTabs(
 ): void {
   if (!readEnvironmentSupportsServerBrowser(threadRef.environmentId)) return;
   for (const session of sessions) {
-    if (!options.autoShowFloatingPreview) {
-      useRightPanelStore.getState().openBrowser(threadRef, session.tabId, true);
-      continue;
-    }
     const force = session.revealRequest?.force === true;
+    if (!options.autoShowFloatingPreview && !force) continue;
     const surface = useRightPanelStore
       .getState()
       .byThreadKey[scopedThreadKey(threadRef)]?.surfaces.find(
@@ -221,69 +214,38 @@ export function floatDeviceSurface(
   usePreviewMiniPlayerStore.getState().open(threadRef, source);
 }
 
-const virtualMachineSessionKey = (session: VirtualMachineState["sessions"][number]) =>
-  `${session.threadId}\u0000${session.name}`;
-
-/** Per environment: the VM sessions in the last snapshot, a baseline as for devices. */
-const virtualMachineSessionBaselines = new Map<EnvironmentId, ReadonlySet<string>>();
-
-/**
- * Shows VMs an agent or another client opened the way devices show. Floating VMs whose session
- * ended close, and turning VMs off returns their tabs to the device list.
- */
-export function applyVirtualMachineSnapshot(
-  environmentId: EnvironmentId,
-  state: VirtualMachineState,
-  options: { readonly sheetLayout: boolean; readonly autoShowFloatingPreview: boolean },
+/** Floats a browser panel tab over chat, unless it never navigated. */
+export function floatBrowserSurface(
+  threadRef: ScopedThreadRef,
+  tabId: string,
+  state: ThreadPreviewState,
 ): void {
-  const sessions = state.enabled ? state.sessions : [];
-  const miniPlayer = usePreviewMiniPlayerStore.getState();
-  for (const [threadKey, entry] of Object.entries(miniPlayer.byThreadKey)) {
-    const source = entry.source;
-    if (source.kind !== "vm") continue;
-    const ref = parseScopedThreadKey(threadKey);
-    if (
-      ref?.environmentId === environmentId &&
-      !sessions.some((session) => session.threadId === ref.threadId && session.name === source.name)
-    )
-      miniPlayer.close(ref);
-  }
-  if (!state.enabled) useRightPanelStore.getState().releaseVirtualMachineTabs(environmentId);
+  const snapshot = state.sessions[tabId] ?? null;
+  if (previewNavStatus(snapshot, state.desktopByTabId[tabId] ?? null)._tag === "Idle") return;
+  usePreviewMiniPlayerStore.getState().open(threadRef, browserMiniPlayerSource(tabId));
+}
 
-  const previous = virtualMachineSessionBaselines.get(environmentId);
-  virtualMachineSessionBaselines.set(
-    environmentId,
-    new Set(sessions.map(virtualMachineSessionKey)),
-  );
-  if (!previous || options.sheetLayout) return;
-  for (const session of sessions) {
-    if (previous.has(virtualMachineSessionKey(session))) continue;
-    const threadRef = scopeThreadRef(environmentId, session.threadId);
-    // A VM the user opens already has its tab, even when its session arrives after the open.
-    if (
-      isVirtualMachineOpeningLocally(threadRef, session.name) ||
-      useRightPanelStore
-        .getState()
-        .byThreadKey[scopedThreadKey(threadRef)]?.surfaces.some(
-          (surface) => surface.kind === "device" && surface.virtualMachine === session.name,
-        )
-    )
-      continue;
-    if (options.autoShowFloatingPreview)
-      usePreviewMiniPlayerStore.getState().open(threadRef, { kind: "vm", name: session.name });
-    else useRightPanelStore.getState().openVirtualMachine(threadRef, session.name, true);
+/** Floats a panel's browser or device as the panel closes, when Auto-show floating preview is on. */
+export function floatPanelSurfaceOnClose(
+  threadRef: ScopedThreadRef,
+  source: PreviewMiniPlayerSource,
+  options: {
+    readonly autoShowFloatingPreview: boolean;
+    readonly previewState: ThreadPreviewState;
+    readonly deviceState: DeviceServiceState | null;
+  },
+): void {
+  if (!options.autoShowFloatingPreview) return;
+  if (source.kind === "browser") {
+    floatBrowserSurface(threadRef, source.tabId, options.previewState);
+  } else {
+    floatDeviceSurface(threadRef, source, options.deviceState);
   }
 }
 
 export function resetDeviceSessionBaselinesForTests(): void {
   deviceSessionBaselines.clear();
-  virtualMachineSessionBaselines.clear();
 }
-
-const agentOpenedPreviewOptions = () => ({
-  sheetLayout: window.matchMedia(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY).matches,
-  autoShowFloatingPreview: getClientSettings().browserAutoShowFloatingPreview,
-});
 
 function watchEnvironmentDevices(environmentId: EnvironmentId): () => void {
   return appAtomRegistry.subscribe(
@@ -291,41 +253,13 @@ function watchEnvironmentDevices(environmentId: EnvironmentId): () => void {
     (result) => {
       const state = AsyncResult.getOrElse(result, () => null);
       if (state === null) return;
-      applyDeviceSnapshot(environmentId, state, agentOpenedPreviewOptions());
+      applyDeviceSnapshot(environmentId, state, {
+        sheetLayout: window.matchMedia(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY).matches,
+        autoShowFloatingPreview: getClientSettings().browserAutoShowFloatingPreview,
+      });
     },
     { immediate: true },
   );
-}
-
-/** VM state is followed only while the environment's server reports VM support. */
-function watchEnvironmentVirtualMachines(environmentId: EnvironmentId): () => void {
-  let stopState: (() => void) | null = null;
-  const stopConfigs = appAtomRegistry.subscribe(
-    environmentServerConfigsAtom,
-    (configs) => {
-      const supported =
-        configs.get(environmentId)?.environment.capabilities.virtualMachines === true;
-      if (supported && stopState === null) {
-        stopState = appAtomRegistry.subscribe(
-          virtualMachineEnvironment.state({ environmentId, input: {} }),
-          (result) => {
-            const state = AsyncResult.getOrElse(result, () => null);
-            if (state !== null)
-              applyVirtualMachineSnapshot(environmentId, state, agentOpenedPreviewOptions());
-          },
-          { immediate: true },
-        );
-      } else if (!supported && stopState !== null) {
-        stopState();
-        stopState = null;
-      }
-    },
-    { immediate: true },
-  );
-  return () => {
-    stopConfigs();
-    stopState?.();
-  };
 }
 
 /**
@@ -352,12 +286,7 @@ export function startAgentOpenedPreviews(): () => void {
     }
     for (const environmentId of environmentIds) {
       if (!watchedEnvironments.has(environmentId)) {
-        const stopDevices = watchEnvironmentDevices(environmentId);
-        const stopVirtualMachines = watchEnvironmentVirtualMachines(environmentId);
-        watchedEnvironments.set(environmentId, () => {
-          stopDevices();
-          stopVirtualMachines();
-        });
+        watchedEnvironments.set(environmentId, watchEnvironmentDevices(environmentId));
       }
     }
   };
