@@ -87,7 +87,8 @@ async function mergeReviewedNightly({ github, merger, pullNumber, head, base, up
       blocked: true,
       reason: `Review findings on fork changes need a fix or a written dismissal, then a resolved thread: ${forkFiles.join(", ")}.`,
     };
-  // Main requires signed commits, so GitHub refuses the merge while any new commit is unsigned.
+  // Upstream's release bot does not sign its commits. Main's signature ruleset lets only this App
+  // merge past them, so the App merges unsigned commits only when the upstream nightly has them.
   for (let page = 1, seen = 0; ; page++) {
     const { data } = await github.rest.repos.compareCommitsWithBasehead({
       ...REPOSITORY,
@@ -95,13 +96,20 @@ async function mergeReviewedNightly({ github, merger, pullNumber, head, base, up
       per_page: 100,
       page,
     });
-    const unsigned = data.commits.find((commit) => commit.commit?.verification?.verified !== true);
-    if (unsigned)
-      return {
-        merged: false,
-        blocked: true,
-        reason: `Commit ${unsigned.sha.slice(0, 10)} is unsigned, and main requires signed commits. Merge the PR by hand with that rule briefly lifted.`,
-      };
+    for (const commit of data.commits) {
+      if (commit.commit?.verification?.verified === true) continue;
+      const { data: upstreamHas } = await github.rest.repos.compareCommitsWithBasehead({
+        ...REPOSITORY,
+        basehead: `${commit.sha}...${upstream}`,
+        per_page: 1,
+      });
+      if (upstreamHas.status !== "ahead" && upstreamHas.status !== "identical")
+        return {
+          merged: false,
+          blocked: true,
+          reason: `Commit ${commit.sha.slice(0, 10)} is unsigned and not from the upstream nightly. Replace it with a signed commit.`,
+        };
+    }
     seen += data.commits.length;
     if (data.commits.length === 0 || seen >= data.total_commits) break;
   }

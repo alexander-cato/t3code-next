@@ -3,7 +3,8 @@ const test = require("node:test");
 const { mergeReviewedNightly } = require("./fork-sync-review.cjs");
 const HEAD = "a".repeat(40),
   BASE = "b".repeat(40),
-  UPSTREAM = "d".repeat(40);
+  UPSTREAM = "d".repeat(40),
+  RELEASE = "e".repeat(40);
 function fixture() {
   const state = {
     checks: ["Check", "Agent context budget", "Security check"].map((name) => ({
@@ -26,6 +27,9 @@ function fixture() {
     page: 0,
     secondPage: false,
     signed: true,
+    // An unsigned upstream release commit, as t3-code-bot publishes them.
+    release: { sha: RELEASE, commit: { verification: { verified: false } } },
+    upstreamHas: [RELEASE],
   };
   const listForRef = () => {};
   const github = {
@@ -54,12 +58,16 @@ function fixture() {
           if (!sha) throw Object.assign(new Error("missing"), { status: 404 });
           return { data: { sha } };
         },
-        compareCommitsWithBasehead: async () => ({
-          data: {
-            total_commits: 1,
-            commits: [{ sha: HEAD, commit: { verification: { verified: state.signed } } }],
-          },
-        }),
+        compareCommitsWithBasehead: async ({ basehead }) => {
+          const [from, to] = basehead.split("...");
+          if (to === UPSTREAM)
+            return { data: { status: state.upstreamHas.includes(from) ? "ahead" : "diverged" } };
+          const commits = [
+            state.release,
+            { sha: HEAD, commit: { verification: { verified: state.signed } } },
+          ];
+          return { data: { total_commits: commits.length, commits } };
+        },
         getCommit: async () => ({
           data: { sha: HEAD, commit: { verification: { verified: true } } },
         }),
@@ -99,7 +107,7 @@ function fixture() {
     input: { github, merger, pullNumber: 7, head: HEAD, base: BASE, upstream: UPSTREAM },
   };
 }
-test("merges a candidate whose checks pass without waiting for a Codex review", async () => {
+test("merges a candidate whose checks pass, including upstream's unsigned commits, without a Codex review", async () => {
   const { state, input } = fixture();
   assert.equal((await mergeReviewedNightly(input)).merged, true);
   assert.deepEqual(state.merged, [
@@ -143,6 +151,7 @@ test("leaves the PR open for check, discussion, signature, or main races without
       state.secondPage = true;
     },
     (state) => (state.signed = false),
+    (state) => (state.upstreamHas = []),
   ];
   for (const alter of [
     (state) => (state.checks = state.checks.filter((check) => check.name !== "Security check")),
